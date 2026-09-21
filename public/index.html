@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>NovelCut Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+    <dialog id="createDialog" class="modal create-modal">
+      <form method="dialog" id="createForm">
+        <header class="modal-head">
+          <div>
+            <span id="createDialogKicker" class="kicker">NEW PROJECT</span>
+            <h2 id="createDialogTitle">把制作资料一次放进来</h2>
+            <p id="createDialogDescription">故事、人物、场景、分镜和提示词可以混合粘贴，系统会先整理成可编辑镜头。</p>
+          </div>
+          <button type="button" class="icon-button" data-close-dialog aria-label="关闭">×</button>
+        </header>
+        <div class="create-grid">
+          <label class="field span-2" data-create-only>
+            <span>项目名称</span>
+            <input name="name" required placeholder="例如：长安画杀 · 第一集" autocomplete="off" />
+          </label>
+          <div class="field span-2 source-import" id="sourceImportZone">
+            <div class="source-import-head">
+              <span>全部制作资料</span>
+              <span id="sourceImportStatus" class="source-import-status">支持多文件 / 文件夹 / 本机路径</span>
+            </div>
+            <div class="source-mode-row">
+              <span>导入到编辑区</span>
+              <div class="segmented source-mode">
+                <label><input type="radio" name="sourceMergeMode" value="replace" checked /><span>替换现有内容</span></label>
+                <label><input type="radio" name="sourceMergeMode" value="append" /><span>追加到末尾</span></label>
+              </div>
+            </div>
+            <div class="source-import-actions">
+              <label id="sourceFileButton" class="button source-file-button" title="选择一个或多个 Markdown/TXT 分镜文件">
+                上传分镜文件
+                <input id="sourceFileInput" type="file" multiple accept=".md,.markdown,.mdown,.txt" aria-describedby="sourcePickerHelp" />
+              </label>
+              <label id="sourceFolderButton" class="button ghost source-folder-button" title="选择整个文件夹；在此模式下文件会置灰，这是系统正常行为">
+                导入整个文件夹
+                <input id="sourceFolderInput" type="file" multiple webkitdirectory directory aria-describedby="sourcePickerHelp" />
+              </label>
+              <input id="sourcePathInput" class="source-path-input" type="text" placeholder="本机文件或文件夹绝对路径" autocomplete="off" />
+              <button id="loadSourcePath" type="button" class="button ghost">读取路径</button>
+            </div>
+            <div id="sourceList" class="source-list" hidden></div>
+            <textarea name="sourceText" required rows="16" placeholder="也可以直接粘贴故事梗概、人物设定、场景设定和逐镜提示词……"></textarea>
+            <div id="sourcePreview" class="source-preview" hidden></div>
+            <p id="sourcePickerHelp" class="source-picker-help"><strong>导入单个 MD：</strong>点“上传分镜文件”。<strong>导入文件夹：</strong>点“导入整个文件夹”；此时文件置灰是正常的，请直接选中所在文件夹。</p>
+            <p class="source-import-help">支持多选与拖入；文件夹最多扫描 4 层、80 个文本文件，总计最大 6MB。创建/追加前会显示解析结果与时长调整。</p>
+          </div>
+          <label class="field" data-create-only>
+            <span>画幅</span>
+            <select name="aspectRatio">
+              <option value="9:16">9:16 竖屏</option>
+              <option value="16:9">16:9 横屏</option>
+              <option value="1:1">1:1 方形</option>
+            </select>
+          </label>
+          <label class="field" data-create-only>
+            <span>试片清晰度</span>
+            <select name="resolution">
+              <option value="720p">720p 快速试片</option>
+              <option value="1080p">1080p 高质量</option>
+            </select>
+          </label>
+          <label class="field span-2" data-create-only>
+            <span>视觉基准</span>
+            <input name="visualStyle" value="电影级生活写实摄影，自然表演，统一人物与场景，稳定克制的镜头" />
+          </label>
+          <label class="field span-2" data-create-only>
+            <span>声音策略</span>
+            <div class="segmented form-segmented">
+              <label><input type="radio" name="audioStrategy" value="post_dub" checked /><span>后期配音</span></label>
+              <label><input type="radio" name="audioStrategy" value="native" /><span>原生演出</span></label>
+              <label><input type="radio" name="audioStrategy" value="no_dialogue" /><span>无对白</span></label>
+            </div>
+          </label>
+        </div>
+        <footer class="modal-actions">
+          <button type="button" class="button ghost" id="loadSample">载入示例</button>
+          <span class="spacer"></span>
+          <button type="button" class="button ghost" data-close-dialog>取消</button>
+          <button id="createSubmit" type="submit" class="button primary">创建并准备资产</button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="deleteDialog" class="modal confirm-modal">
+      <form method="dialog" id="deleteForm">
+        <header class="modal-head">
+          <div>
+            <h2>删除这个项目？</h2>
+            <p id="deleteProjectName"></p>
+          </div>
+          <button type="button" class="icon-button" data-close-delete aria-label="关闭">×</button>
+        </header>
+        <div class="confirm-copy">
+          <p>项目会从列表中移除。删除完成后可立即撤销，现有视频和素材不会立刻清理。</p>
+        </div>
+        <footer class="modal-actions">
+          <span class="spacer"></span>
+          <button type="button" class="button ghost" data-close-delete>取消</button>
+          <button type="submit" class="button danger solid">删除项目</button>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="roughCutDialog" class="modal roughcut-modal">
+      <div id="roughCutContent"></div>
+    </dialog>
+    <dialog id="promptDialog" class="modal prompt-modal">
+      <div id="promptDialogContent"></div>
+    </dialog>
+    <script src="/app.js"></script>
+  </body>
+</html>

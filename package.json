@@ -1,0 +1,19 @@
+{
+  "name": "novelcut-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NovelCut personal AI short-drama production studio",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "verify": "node --check server.js && node --check public/app.js && node --check lib/prompt-knowledge.js && node --check tests/project-delete-consistency.js && node --check tests/prompt-knowledge.js && node --check tests/asset-consistency-flow.js && node --check tests/source-import.js && node --check tests/composite-source.js",
+    "test:consistency": "node tests/project-delete-consistency.js",
+    "test:knowledge": "node tests/prompt-knowledge.js",
+    "test:assets": "node tests/asset-consistency-flow.js",
+    "test:source": "node tests/source-import.js",
+    "test:composite": "node tests/composite-source.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

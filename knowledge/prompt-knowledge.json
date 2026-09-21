@@ -1,0 +1,548 @@
+{
+  "meta": {
+    "name": "NovelCut 短剧镜头知识库",
+    "version": "2026.09.18-3",
+    "updatedAt": "2026-09-18",
+    "language": "zh-CN",
+    "purpose": "把上传分镜转换为更明确、可检查、适合 Seedance 2.0 逐镜生成的执行指令。",
+    "principles": [
+      "保留创作者原意，只补齐缺失的镜头执行信息，不擅自扩写剧情。",
+      "主体与核心动作优先，装饰性风格词靠后。",
+      "一个镜头只保留一个主运镜；短时长只承载一个主要动作结果。",
+      "人物、服装、关键道具、场景地理、时间与光向属于跨镜连续性锚点。",
+      "约束保持少而具体，优先使用正向可执行描述。",
+      "身份参考、服装状态、空间基准、逐镜视角和首尾帧必须各自承担单一职责，避免参考图之间互相污染。",
+      "先锁定世界坐标、人物调度和动作终点，再选择景别、机位和镜头运动。"
+    ]
+  },
+  "compiler": {
+    "fieldOrder": [
+      "subject",
+      "action",
+      "scene",
+      "camera",
+      "timeline",
+      "lighting",
+      "style",
+      "audio",
+      "constraints"
+    ],
+    "defaultShotSize": {
+      "character": "中景，人物动作和手部关系清楚",
+      "emotion": "近景，面部表情与眼神清楚",
+      "dialoguePair": "双人中景，保持双方轴线与视线关系",
+      "environment": "全景，先建立主体与环境的空间关系"
+    },
+    "defaultCamera": "固定机位，构图稳定，不自行增加复杂运镜",
+    "timelineRatios": [0.2, 0.8],
+    "constraints": {
+      "basePositive": [
+        "动作连续且符合惯性",
+        "主体结构自然",
+        "焦点稳定并服务于核心动作"
+      ],
+      "characterPositive": [
+        "人物身份、五官、发型和服装全程锁定",
+        "表演以可见的眼神、呼吸、手部和姿态变化呈现"
+      ],
+      "scenePositive": [
+        "场景布局、时间、天气和主光方向连续"
+      ],
+      "negative": [
+        "不出现字幕",
+        "不出现 Logo 或水印",
+        "不增加未指定人物或道具"
+      ],
+      "maxNegativeItems": 4
+    }
+  },
+  "lexicon": {
+    "shotSizes": [
+      { "id": "extreme_wide", "labels": ["大远景", "超远景", "极远景", "extreme wide", "ews"], "canonical": "大远景" },
+      { "id": "wide", "labels": ["全景", "远景", "wide shot", "long shot", "ws"], "canonical": "全景" },
+      { "id": "medium", "labels": ["中景", "medium shot", "ms"], "canonical": "中景" },
+      { "id": "medium_close", "labels": ["中近景", "半身近景", "medium close-up", "mcu"], "canonical": "中近景" },
+      { "id": "close", "labels": ["近景", "特写", "close-up", "close up", "cu"], "canonical": "近景特写" },
+      { "id": "extreme_close", "labels": ["大特写", "极特写", "微距", "extreme close-up", "ecu", "macro"], "canonical": "大特写" },
+      { "id": "two_shot", "labels": ["双人镜头", "双人中景", "two shot", "two-shot"], "canonical": "双人中景" },
+      { "id": "over_shoulder", "labels": ["过肩", "过肩镜头", "over the shoulder", "ots"], "canonical": "过肩镜头" },
+      { "id": "pov", "labels": ["主观镜头", "第一视角", "第一人称", "pov"], "canonical": "主观视角" }
+    ],
+    "angles": [
+      { "id": "eye", "labels": ["平视", "视线高度", "eye level"], "canonical": "平视" },
+      { "id": "low", "labels": ["低机位", "仰拍", "低角度", "low angle"], "canonical": "低机位仰拍" },
+      { "id": "high", "labels": ["高机位", "俯拍", "高角度", "high angle"], "canonical": "高机位俯拍" },
+      { "id": "overhead", "labels": ["顶拍", "正俯拍", "鸟瞰", "overhead", "bird's-eye"], "canonical": "顶视俯拍" },
+      { "id": "dutch", "labels": ["荷兰角", "倾斜构图", "dutch angle"], "canonical": "荷兰角" }
+    ],
+    "cameraMoves": [
+      { "id": "locked", "labels": ["固定机位", "固定镜头", "静止镜头", "锁定机位", "locked-off", "static camera", "static shot"], "canonical": "固定机位" },
+      { "id": "push", "labels": ["推镜", "推进", "缓慢前推", "缓推", "轻推", "推近", "dolly in", "push in"], "canonical": "稳定缓慢推近" },
+      { "id": "pull", "labels": ["拉镜", "后拉", "拉远", "dolly out", "pull back"], "canonical": "稳定缓慢拉远" },
+      { "id": "pan", "labels": ["横摇", "左摇", "右摇", "摇摄", "pan left", "pan right", "whip pan", "甩镜"], "canonical": "水平摇摄" },
+      { "id": "tilt", "labels": ["上摇", "下摇", "俯仰摇摄", "tilt up", "tilt down"], "canonical": "垂直摇摄" },
+      { "id": "track", "labels": ["跟拍", "跟随镜头", "微距跟随", "追踪镜头", "tracking shot", "follow shot"], "canonical": "稳定跟拍" },
+      { "id": "truck", "labels": ["横移", "横向轨道移动", "侧向移动", "侧移", "truck left", "truck right", "lateral slide"], "canonical": "侧向平移" },
+      { "id": "orbit", "labels": ["环绕", "绕拍", "弧形运动", "orbit", "arc shot"], "canonical": "弧形环绕" },
+      { "id": "crane", "labels": ["升降镜头", "升格机位", "摄影机升高", "缓慢下移", "垂直俯冲", "摇臂", "crane up", "crane down", "pedestal"], "canonical": "平稳升降" },
+      { "id": "handheld", "labels": ["手持", "轻微晃动", "handheld", "shaky cam"], "canonical": "克制手持跟随" },
+      { "id": "aerial", "labels": ["航拍", "无人机", "空中俯冲", "drone", "aerial"], "canonical": "航拍运动" },
+      { "id": "zoom", "labels": ["变焦", "快速变焦", "zoom in", "zoom out"], "canonical": "镜头内变焦" },
+      { "id": "rack_focus", "labels": ["焦点转移", "移焦", "拉焦", "rack focus"], "canonical": "焦点转移" }
+    ],
+    "lighting": [
+      { "id": "natural", "labels": ["自然光", "日光", "晨光", "夕阳", "黄金时刻", "阴天散射光"], "canonical": "自然光" },
+      { "id": "warm", "labels": ["暖光", "烛光", "钨丝灯", "暖色灯", "金色光"], "canonical": "暖色主光" },
+      { "id": "cool", "labels": ["冷光", "冷蓝", "月光", "蓝调", "冷色调"], "canonical": "冷色主光" },
+      { "id": "neon", "labels": ["霓虹", "neon"], "canonical": "霓虹实景光" },
+      { "id": "rim", "labels": ["轮廓光", "逆光", "边缘光", "rim light", "backlight"], "canonical": "轮廓逆光" },
+      { "id": "volumetric", "labels": ["体积光", "光束", "god rays", "volumetric light"], "canonical": "体积光" }
+    ],
+    "compositions": [
+      { "id": "center", "labels": ["居中构图", "中心构图", "centered composition"], "canonical": "主体居中" },
+      { "id": "thirds", "labels": ["三分法", "三分构图", "rule of thirds"], "canonical": "三分法构图" },
+      { "id": "symmetry", "labels": ["对称构图", "轴对称", "symmetrical composition"], "canonical": "对称构图" },
+      { "id": "leading_lines", "labels": ["引导线", "透视线", "leading lines"], "canonical": "引导线构图" },
+      { "id": "frame_within_frame", "labels": ["框中框", "门框构图", "窗框构图", "frame within a frame"], "canonical": "框中框构图" },
+      { "id": "negative_space", "labels": ["负空间", "留白构图", "negative space"], "canonical": "负空间构图" },
+      { "id": "foreground_occlusion", "labels": ["前景遮挡", "遮挡转场", "foreground occlusion"], "canonical": "前景遮挡建立纵深" }
+    ],
+    "focus": [
+      { "id": "deep_focus", "labels": ["深焦", "全景深", "deep focus"], "canonical": "深焦" },
+      { "id": "shallow_focus", "labels": ["浅景深", "背景虚化", "shallow depth of field", "bokeh"], "canonical": "浅景深" },
+      { "id": "split_focus", "labels": ["分裂焦点", "split diopter"], "canonical": "前后景同时清晰" }
+    ],
+    "lenses": [
+      { "id": "ultra_wide_lens", "labels": ["超广角", "14mm", "18mm", "20mm"], "canonical": "超广角镜头" },
+      { "id": "wide_lens", "labels": ["广角镜头", "24mm", "28mm", "35mm"], "canonical": "广角镜头" },
+      { "id": "normal_lens", "labels": ["标准镜头", "40mm", "50mm"], "canonical": "标准焦段" },
+      { "id": "portrait_lens", "labels": ["人像镜头", "85mm", "100mm"], "canonical": "中长焦人像镜头" },
+      { "id": "telephoto_lens", "labels": ["长焦", "135mm", "200mm", "telephoto"], "canonical": "长焦压缩空间" }
+    ],
+    "blocking": [
+      { "id": "screen_left", "labels": ["画面左侧", "左前景", "左后景", "screen left"], "canonical": "画面左侧" },
+      { "id": "screen_right", "labels": ["画面右侧", "右前景", "右后景", "screen right"], "canonical": "画面右侧" },
+      { "id": "foreground", "labels": ["前景", "foreground"], "canonical": "前景" },
+      { "id": "midground", "labels": ["中景层", "中部空间", "midground"], "canonical": "中景层" },
+      { "id": "background", "labels": ["背景", "后景", "background"], "canonical": "背景" },
+      { "id": "entrance", "labels": ["从左进入", "从右进入", "由门口进入", "enter frame"], "canonical": "明确入画入口" },
+      { "id": "exit", "labels": ["从左离开", "从右离开", "离开画面", "exit frame"], "canonical": "明确出画方向" },
+      { "id": "eyeline", "labels": ["视线看向", "对视", "视线匹配", "eyeline match"], "canonical": "视线关系明确" }
+    ],
+    "transitions": [
+      { "id": "match_cut", "labels": ["匹配剪辑", "形状匹配", "match cut"], "canonical": "匹配剪辑" },
+      { "id": "action_match", "labels": ["动作接", "动作匹配", "match on action"], "canonical": "动作匹配剪辑" },
+      { "id": "sound_bridge", "labels": ["声音桥", "声画桥接", "sound bridge"], "canonical": "声音桥" },
+      { "id": "occlusion_wipe", "labels": ["遮挡转场", "物体擦镜", "occlusion transition"], "canonical": "遮挡转场" },
+      { "id": "dissolve", "labels": ["叠化", "溶解", "dissolve"], "canonical": "叠化" }
+    ]
+  },
+  "dramaticPatterns": [
+    { "id": "reaction", "labels": ["反应", "愣住", "震惊", "迟疑", "眼神", "表情", "脸色", "泪", "微表情"], "name": "反应镜头", "direction": "让情绪通过眼神、呼吸、嘴角、手部或姿态的可见变化完成，结尾保留短暂停顿。" },
+    { "id": "dialogue", "labels": ["说：", "说道", "低声说", "大喊", "对白", "台词", "回答", "问道"], "name": "对白镜头", "direction": "先建立说话者和听者的位置；只保留本镜必要台词，口型、视线和反应对象一致。" },
+    { "id": "reveal", "labels": ["揭示", "露出", "发现", "看见", "转身", "门打开", "真相", "原来"], "name": "揭示镜头", "direction": "先遮蔽关键信息，再由动作或镜头在中段揭示，结尾停在可辨认的结果上。" },
+    { "id": "entrance", "labels": ["进入画面", "走进", "冲进", "推门进入", "人物出场", "人物登场"], "name": "人物入场", "direction": "明确人物从画面哪一侧或空间入口出现，并在动作终点形成稳定站位。" },
+    { "id": "prop_insert", "labels": ["手机", "信件", "照片", "钥匙", "戒指", "屏幕", "文件", "证据", "道具特写"], "name": "关键道具", "direction": "让道具的持有者、位置和朝向清楚；需要读信息时只展示一个关键视觉点。" },
+    { "id": "action", "labels": ["追逐", "打斗", "奔跑", "冲刺", "跳跃", "摔倒", "抓住", "爆炸"], "name": "动作镜头", "direction": "只保留一个动作因果链：准备、发力、接触或位移、结果；不要同时安排多条独立动作。" },
+    { "id": "atmosphere", "labels": ["空镜", "环境", "街道", "城市", "山谷", "海面", "天空", "建筑"], "name": "环境建立", "direction": "先交代空间尺度和主体位置，再用环境中的一个持续运动维持画面生命力。" }
+  ],
+  "shotRecipes": [
+    {
+      "id": "establishing_hook",
+      "name": "环境钩子",
+      "priority": 70,
+      "labels": ["超大全景", "大全景", "天际线", "城市全貌", "俯瞰城市", "穿云", "环境建立", "开场钩子"],
+      "minimumMatches": 1,
+      "direction": "先用空间尺度建立世界，再在同一镜头内把注意力收束到主角或异常点。",
+      "promptSkeleton": "空间全貌与持续环境运动 → 主体位置和观察方向 → 一个反差、异常或问题作为落点。",
+      "referencePriority": ["scene_view", "character_view"],
+      "continuityChecks": ["地理方向", "主体在空间中的高度与位置", "主光方向", "下一镜视线落点"]
+    },
+    {
+      "id": "dialogue_exchange",
+      "name": "对白交锋",
+      "priority": 85,
+      "labels": ["核心对白：", "两句对白", "对白轮流", "发问", "回答", "训话", "低声说", "大喊"],
+      "exclude": ["核心对白：无", "无对白"],
+      "minimumMatches": 1,
+      "direction": "先锁定双方站位、轴线和视线，再按说话顺序分配动作；说话者和听者不可同时抢动作。",
+      "promptSkeleton": "建立说话者与听者位置 → 第一人台词与听者反应 → 必要停顿 → 第二人回应或沉默落点。",
+      "referencePriority": ["character_view", "scene_view"],
+      "continuityChecks": ["左右站位", "180度轴线", "视线匹配", "台词顺序", "口型与说话者"]
+    },
+    {
+      "id": "reaction_payoff",
+      "name": "反应落点",
+      "priority": 75,
+      "labels": ["挑眉", "叹气", "翻白眼", "愣住", "震惊", "迟疑", "脸色", "无奈", "反应镜头"],
+      "minimumMatches": 1,
+      "direction": "动作完成后给出一个可见、克制的情绪变化，让反应成为剪辑落点。",
+      "promptSkeleton": "维持初始表情 → 外界信息触发 → 眼神、呼吸、嘴角或手部发生单一变化 → 短暂停顿。",
+      "referencePriority": ["character_view"],
+      "continuityChecks": ["触发对象方向", "面部身份", "手部位置", "表情起点与终点"]
+    },
+    {
+      "id": "comedy_turn",
+      "name": "反差笑点",
+      "priority": 76,
+      "labels": ["笑点", "反差", "轻喜剧", "无奈", "翻白眼", "讽刺", "坏笑", "一本正经"],
+      "minimumMatches": 1,
+      "direction": "先把严肃目标建立清楚，再用一个动作或一句话完成反差；笑点后不要追加第二个解释性动作。",
+      "promptSkeleton": "正常状态 → 观众预期 → 单一反差动作或台词 → 角色克制反应。",
+      "referencePriority": ["character_view", "prop"],
+      "continuityChecks": ["喜剧道具位置", "台词节拍", "反应对象", "笑点后的停顿"]
+    },
+    {
+      "id": "disaster_escalation",
+      "name": "危机升级",
+      "priority": 90,
+      "labels": ["坍塌", "失控", "断裂", "爆闪", "警报", "制动失效", "逼近", "崩断", "爆开"],
+      "minimumMatches": 2,
+      "direction": "固定危险源、受威胁主体和运动方向，用一条因果链逐级升级，不让灾害元素随机增加。",
+      "promptSkeleton": "稳定空间与危险方向 → 第一处异常 → 因果升级 → 明确的迫近结果或失败落点。",
+      "referencePriority": ["scene_view", "prop", "character_view"],
+      "continuityChecks": ["危险源方向", "运动方向", "空间尺度", "破坏状态", "人物安全位置"]
+    },
+    {
+      "id": "hero_entrance",
+      "name": "关键人物入场",
+      "priority": 82,
+      "labels": ["关键人物进入", "人物登场", "落地入场", "挡在两者之间", "冲入画面", "从入口出现", "阻止众人"],
+      "minimumMatches": 1,
+      "direction": "先让观众看清危险与原有角色站位，再让关键人物从明确方向进入并停在可读的英雄位。",
+      "promptSkeleton": "既有空间和危机 → 遮挡、光或声音预告 → 人物从明确入口进入 → 停在危险与人群之间。",
+      "referencePriority": ["character_view", "scene_view"],
+      "continuityChecks": ["入画方向", "落点位置", "服装状态", "与危险源的朝向"]
+    },
+    {
+      "id": "prop_transformation",
+      "name": "道具或能力变化",
+      "priority": 88,
+      "labels": ["变大", "增长", "变粗", "分裂成", "化为", "取出", "掏出", "缩小", "恢复原状", "毫毛"],
+      "minimumMatches": 1,
+      "direction": "变化前先展示原始比例与持有关系，变化过程保持材质和轴向连续，最后停在明确的新状态。",
+      "promptSkeleton": "原始道具与持有人 → 触发动作 → 一次连续形态变化 → 新尺寸、数量或位置锁定。",
+      "referencePriority": ["prop", "character_view", "scene_view"],
+      "continuityChecks": ["持有人", "所在手", "原始尺寸", "变化轴向", "最终数量与尺寸"]
+    },
+    {
+      "id": "action_payoff",
+      "name": "单一动作兑现",
+      "priority": 84,
+      "labels": ["撑住", "停住", "跃上", "急停", "制动", "击中", "抓住", "顶住", "救下", "完成动作"],
+      "minimumMatches": 1,
+      "direction": "把动作写成准备、发力、接触或位移、结果四段，摄影机只服务这条因果链。",
+      "promptSkeleton": "动作准备 → 单一发力 → 接触或位移 → 清晰物理结果与短暂停顿。",
+      "referencePriority": ["character_view", "prop", "scene_view"],
+      "continuityChecks": ["动作起点", "运动方向", "接触点", "物体惯性", "动作终点"]
+    },
+    {
+      "id": "rescue_crowd",
+      "name": "群体救援",
+      "priority": 86,
+      "labels": ["救援", "撤离", "疏散", "搀扶", "伤者", "消防员", "乘客", "救援者"],
+      "minimumMatches": 2,
+      "direction": "固定人群数量层级和单向流线，只突出两到三组代表性救援动作，避免全员同时随机运动。",
+      "promptSkeleton": "建立出口与单向流线 → 第一组代表动作 → 第二组代表动作 → 最后一人安全交接。",
+      "referencePriority": ["scene_view", "character_view", "prop"],
+      "continuityChecks": ["出口方向", "人群流向", "代表人物位置", "伤者状态", "救援交接点"]
+    },
+    {
+      "id": "human_stakes",
+      "name": "人物代价与情感证明",
+      "priority": 78,
+      "labels": ["母亲", "孩子", "小女孩", "老人", "抱紧", "喘息", "惊讶笑容", "获救"],
+      "minimumMatches": 2,
+      "direction": "用一个具体普通人的动作证明事件后果，不用全景群演替代情感落点。",
+      "promptSkeleton": "事件余波 → 具体人物恢复动作 → 发现结果 → 一个安静、可辨认的情感反应。",
+      "referencePriority": ["character_view", "scene_view"],
+      "continuityChecks": ["人物所在位置", "受伤或安全状态", "视线对象", "前一镜动作结果"]
+    },
+    {
+      "id": "ironic_reversal",
+      "name": "讽刺反转",
+      "priority": 88,
+      "labels": ["抢功", "讽刺", "误会", "功劳归错", "被误解", "无所谓", "注意力转移", "焦点转到", "真正贡献者离开", "背景人物离开"],
+      "minimumMatches": 1,
+      "direction": "同时保留真实贡献者和被关注者的空间关系，用焦点、遮挡或走位完成反转，不额外解释。",
+      "promptSkeleton": "真实结果仍在画面 → 注意力被错误对象吸引 → 焦点或人群转移 → 真正贡献者安静离开。",
+      "referencePriority": ["character_view", "scene_view"],
+      "continuityChecks": ["前后景关系", "焦点转移", "人群朝向", "真实贡献者出画方向"]
+    },
+    {
+      "id": "emotional_resolution",
+      "name": "情绪收束与伏笔",
+      "priority": 85,
+      "labels": ["主题句", "构图呼应", "回照", "情绪收束", "归家", "下一集伏笔", "伏笔", "切黑", "尾声"],
+      "minimumMatches": 1,
+      "direction": "先完成本集情绪收束，再只留一个独立、短促的下一集异常信号。",
+      "promptSkeleton": "与开场呼应的稳定构图 → 主角完成主题动作或台词 → 停顿 → 单一伏笔出现并切黑。",
+      "referencePriority": ["character_view", "scene_view", "prop"],
+      "continuityChecks": ["与开场构图关系", "最终服装与道具", "主题台词口型", "伏笔独立性"]
+    },
+    {
+      "id": "suspense_clue",
+      "name": "悬疑线索揭示",
+      "priority": 84,
+      "labels": ["线索", "秘密", "证据", "真相", "照片", "录音", "监控", "门后", "发现异常"],
+      "minimumMatches": 1,
+      "direction": "先让线索处于部分遮蔽或错误理解中，再通过人物动作逐步显露一个可辨认信息。",
+      "promptSkeleton": "正常观察 → 细节异常 → 人物接近或操作 → 单一线索被看清 → 反应停顿。",
+      "referencePriority": ["prop", "character_view", "scene_view"],
+      "continuityChecks": ["线索原位置", "持有人", "揭示顺序", "人物视线", "信息只展示一个重点"]
+    },
+    {
+      "id": "romantic_tension",
+      "name": "情感靠近",
+      "priority": 80,
+      "labels": ["心动", "暧昧", "告白", "牵手", "拥抱", "靠近", "亲吻", "避开视线"],
+      "minimumMatches": 1,
+      "direction": "用距离、视线和细小动作推进关系，不让双方同时做夸张表演。",
+      "promptSkeleton": "保持初始距离 → 一方试探靠近或触碰 → 另一方可见反应 → 距离或关系产生明确变化。",
+      "referencePriority": ["character_view", "scene_view"],
+      "continuityChecks": ["人物左右站位", "身体距离", "视线对象", "接触部位", "情绪起点与终点"]
+    },
+    {
+      "id": "family_confrontation",
+      "name": "家庭或关系冲突",
+      "priority": 83,
+      "labels": ["争吵", "质问", "对峙", "威胁", "推开", "摔门", "沉默对抗", "关系破裂"],
+      "minimumMatches": 1,
+      "direction": "先明确权力关系和空间距离，再只保留一次情绪升级与一个明确后果。",
+      "promptSkeleton": "对峙站位 → 一方施压或质问 → 另一方反应或反击 → 关系后果落点。",
+      "referencePriority": ["character_view", "scene_view", "prop"],
+      "continuityChecks": ["人物轴线", "谁掌控空间", "情绪强度", "道具归属", "离开方向"]
+    },
+    {
+      "id": "pursuit_escape",
+      "name": "追逐与逃离",
+      "priority": 87,
+      "labels": ["追逐", "逃跑", "追上", "躲避", "冲出", "奔跑", "甩开", "逃离"],
+      "minimumMatches": 1,
+      "direction": "锁定追逐双方、屏幕运动方向和距离变化，摄影机只采用一种主要跟随方式。",
+      "promptSkeleton": "领先者与追赶者位置 → 同向运动 → 一个障碍或距离变化 → 明确逃脱或被逼近结果。",
+      "referencePriority": ["scene_view", "character_view"],
+      "continuityChecks": ["屏幕运动方向", "双方距离", "空间出口", "障碍位置", "速度连续性"]
+    },
+    {
+      "id": "fight_exchange",
+      "name": "近身动作交锋",
+      "priority": 88,
+      "labels": ["打斗", "交手", "挥拳", "格挡", "踢击", "攻击", "反击", "闪避"],
+      "minimumMatches": 2,
+      "direction": "一镜只表现一次清楚的攻防交换，写清攻击者、接触点、防守反应和最终站位。",
+      "promptSkeleton": "双方初始架势 → 单次攻击 → 格挡或闪避 → 反作用与新站位。",
+      "referencePriority": ["character_view", "scene_view", "prop"],
+      "continuityChecks": ["攻击者", "武器所在手", "接触点", "轴线", "动作后站位"]
+    },
+    {
+      "id": "horror_threat",
+      "name": "恐怖威胁逼近",
+      "priority": 86,
+      "labels": ["异响", "门缝", "脚步声", "黑暗中", "影子", "恐惧", "惊悚", "看不清的身影"],
+      "minimumMatches": 2,
+      "direction": "先固定安全空间，再让声音、影子或局部运动从一个明确方向侵入；不要过早完整展示威胁。",
+      "promptSkeleton": "稳定安全空间 → 单一异常声或影 → 人物发现并寻找来源 → 威胁更近但仍部分遮蔽。",
+      "referencePriority": ["scene_view", "character_view"],
+      "continuityChecks": ["威胁方向", "遮蔽物位置", "人物视线", "光源", "揭示程度"]
+    },
+    {
+      "id": "emotional_breakdown",
+      "name": "情绪崩溃",
+      "priority": 82,
+      "labels": ["崩溃", "忍住眼泪", "流泪", "失声", "绝望", "颤抖", "情绪失控", "强忍"],
+      "minimumMatches": 1,
+      "direction": "从克制状态逐级推进，只选择眼神、呼吸、泪水、声音或姿态中的两项作为可见变化。",
+      "promptSkeleton": "强行维持正常 → 触发信息 → 身体先于语言失控 → 明确但克制的崩溃落点。",
+      "referencePriority": ["character_view"],
+      "continuityChecks": ["情绪起点", "触发对象", "泪水与妆容", "身体姿态", "最终视线"]
+    },
+    {
+      "id": "time_montage",
+      "name": "时间流逝蒙太奇",
+      "priority": 74,
+      "labels": ["蒙太奇", "时间流逝", "数日后", "多年后", "日夜交替", "连续多个", "季节变化"],
+      "minimumMatches": 1,
+      "direction": "选择一个固定构图或重复动作作为锚点，让时间、服装、光线或环境按明确顺序变化。",
+      "promptSkeleton": "固定视觉锚点 → 第一阶段 → 第二阶段 → 最终时间状态；每阶段只改变必要变量。",
+      "referencePriority": ["scene_view", "character_view", "prop"],
+      "continuityChecks": ["固定构图", "时间顺序", "人物年龄或服装", "环境变化", "重复动作"]
+    }
+  ],
+  "lint": {
+    "actionSignals": ["走", "跑", "冲", "跳", "转身", "回头", "抬手", "伸手", "抓", "放下", "拿起", "推开", "打开", "关闭", "坐下", "站起", "拥抱", "打", "踢", "挥", "倒下", "哭", "笑", "说", "看向", "注视"],
+    "maxActions": { "5": 2, "10": 4, "15": 6 },
+    "timeMarkers": ["0-", "0–", "秒", "随后", "接着", "然后", "最后"],
+    "readableTextRisks": ["字幕", "标题", "屏幕文字", "招牌文字", "海报文字", "手机文字", "信件内容", "文件内容"],
+    "vagueWords": ["电影感", "高级感", "震撼", "唯美", "有质感", "氛围感", "大片感", "很悲伤", "很紧张", "非常生气"],
+    "positionSignals": ["画面左", "画面右", "左前景", "右前景", "左后景", "右后景", "前景", "中景层", "背景", "深景", "远景", "近端", "远端", "位于", "之间", "身后", "旁边", "面向", "面对面", "背对", "侧对", "靠近", "俯身", "门口", "窗边", "桌对面", "并排", "前后站位", "对视", "沿右侧", "相反方向", "在脚下", "在上方", "在下方"],
+    "screenDirectionSignals": ["从左进入", "从右进入", "从左侧", "从右侧", "向左", "向右", "左进右出", "右进左出", "由门口进入", "朝门口", "离开画面", "运动方向一致", "沿右侧", "相反方向"],
+    "wardrobeSignals": ["马甲", "战甲", "披风", "盔甲", "衣", "服", "裙", "裤", "鞋", "靴", "围裙", "制服", "战袍", "雨衣", "外套", "头冠", "发箍"],
+    "wardrobeSpecificationSignals": ["红", "橙", "黄", "绿", "蓝", "紫", "黑", "白", "灰", "金", "银", "棕", "材质", "皮革", "棉", "麻", "丝", "金属", "旧", "新", "破损", "干净"]
+  },
+  "continuity": {
+    "dimensions": [
+      "人物身份与体貌",
+      "逐场服装状态与颜色材质",
+      "关键道具的持有人、位置、方向和损坏状态",
+      "场景地理、入口、门窗与陈设位置",
+      "时间、天气、主光方向与色温",
+      "人物屏幕方向、视线与轴线",
+      "人物入画与出画方向",
+      "动作的起始状态与结束状态"
+    ],
+    "referenceRoles": [
+      { "id": "identity", "rule": "只锁定脸、毛发或发型、体型、肤色和身份标记，不承载多套服装。" },
+      { "id": "wardrobe", "rule": "一张图只表现一个场合的一套服装；颜色使用正向色值或色相描述，并补充相邻禁色。" },
+      { "id": "scene", "rule": "只锁定空间结构、材质、陈设和固定主光方向。" },
+      { "id": "shot_view", "rule": "在身份或空间基准上覆盖本镜角度、景别、状态和受光，不反向污染基准图。" },
+      { "id": "prop", "rule": "锁定比例、材质、颜色、持有方式和可变化状态。" },
+      { "id": "first_last_frame", "rule": "只定义动作起点或终点；未指定的信息继承资产与上一镜头。" },
+      { "id": "style", "rule": "只约束摄影、材质和色彩语言，不代替人物、服装或空间参考。" }
+    ],
+    "wardrobeRules": [
+      "基础身份图与场合服装图分离，禁止把战斗、工作和日常服装融合在同一基准图。",
+      "本镜有明确服装时覆盖参考图外层服装；本镜未改变时继承人物上一出场的服装状态。",
+      "服装颜色同时写明确正向颜色和最容易漂移的禁色；同一颜色在不同光线下仍以材质固有色为准。",
+      "换装必须标记发生镜头；换装前后分别保存可追溯状态。"
+    ]
+  },
+  "failureTaxonomy": [
+    { "id": "identity_drift", "name": "身份漂移", "repair": "减少身份参考职责，只锁脸、体型、毛发或发型和身份标记。" },
+    { "id": "wardrobe_drift", "name": "服装漂移", "repair": "拆分互斥服装状态，给出正向固有色、相邻禁色和继承/覆盖关系。" },
+    { "id": "spatial_drift", "name": "空间漂移", "repair": "固定世界坐标、入口、门窗、陈设和主光方向，再改变机位投影。" },
+    { "id": "axis_flip", "name": "轴线翻转", "repair": "明确人物左右站位、视线方向和运动方向，跨镜保持屏幕方向。" },
+    { "id": "action_overload", "name": "动作过载", "repair": "每个短镜头保留一个因果动作链并写清动作终点。" },
+    { "id": "text_mutation", "name": "文字变形", "repair": "把可读文字留到后期，只在生成画面中保留无字界面或留白。" },
+    { "id": "prop_drift", "name": "道具漂移", "repair": "固定道具 ID、持有人、所在手、方向和状态。" },
+    { "id": "camera_conflict", "name": "运镜冲突", "repair": "主体运动、场景运动和摄影机运动分开描述，只保留一个主运镜。" }
+  ],
+  "sources": [
+    {
+      "id": "volcengine-seedance-2-prompt-guide",
+      "title": "Doubao Seedance 2.0 系列提示词指南",
+      "url": "https://www.volcengine.com/docs/82379/2222480?lang=zh",
+      "type": "official",
+      "authority": "火山引擎",
+      "license": "官方公开文档，仅提炼事实与方法，不复制案例",
+      "usedFor": ["八要素结构", "主体定义", "分镜时序", "动作细化", "运镜与约束", "常见问题"]
+    },
+    {
+      "id": "bytedance-seedance-2-launch",
+      "title": "Seedance 2.0 Official Launch",
+      "url": "https://seed.bytedance.com/en/blog/seedance-2-0-official-launch",
+      "type": "official",
+      "authority": "ByteDance Seed",
+      "license": "官方公开说明，仅用于能力边界核验",
+      "usedFor": ["多模态输入", "音视频联合生成", "角色与动作一致性能力边界"]
+    },
+    {
+      "id": "runway-gen4-guide",
+      "title": "Gen-4 Video Prompting Guide",
+      "url": "https://help.runwayml.com/hc/en-us/articles/39789879462419-Gen-4-Video-Prompting-Guide",
+      "type": "official-cross-model",
+      "authority": "Runway",
+      "license": "官方公开文档，仅交叉验证通用视频提示原则",
+      "usedFor": ["直接描述运动", "相机运动与主体运动分离", "迭代方法"]
+    },
+    {
+      "id": "google-video-prompt-guide",
+      "title": "Video generation prompt guide",
+      "url": "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/video/video-gen-prompt-guide",
+      "type": "official-cross-model",
+      "authority": "Google Cloud",
+      "license": "官方公开文档，仅交叉验证镜头术语",
+      "usedFor": ["景别", "角度", "运镜", "镜头光学效果"]
+    },
+    {
+      "id": "aws-nova-reel-guide",
+      "title": "Amazon Nova Reel prompting best practices",
+      "url": "https://docs.aws.amazon.com/nova/latest/userguide/prompting-video-generation.html",
+      "type": "official-cross-model",
+      "authority": "AWS",
+      "license": "官方公开文档，仅交叉验证通用结构",
+      "usedFor": ["主体、动作、环境、光线、风格、相机结构", "小改动迭代与固定种子思路"]
+    },
+    {
+      "id": "seedance-superprompt",
+      "title": "seedance-2.0-superprompt",
+      "url": "https://github.com/scotti1i/seedance-2.0-superprompt",
+      "type": "github",
+      "authority": "社区",
+      "license": "MIT",
+      "usedFor": ["空间层与时间层拆分", "单主运镜", "可见微动作", "短片时序检查表"]
+    },
+    {
+      "id": "seedance-prompt-generator",
+      "title": "seedance-prompt-generator",
+      "url": "https://github.com/maciejdzierzek/seedance-prompt-generator",
+      "type": "github",
+      "authority": "社区",
+      "license": "MIT",
+      "usedFor": ["单镜头模板", "角色绑定", "修改时保持常量"]
+    },
+    {
+      "id": "vibeframe-playbook",
+      "title": "AI video prompting playbook",
+      "url": "https://github.com/vericontext/vibeframe/blob/main/docs/ai-video-prompting.md",
+      "type": "github",
+      "authority": "社区",
+      "license": "MIT",
+      "usedFor": ["角色设定图到关键帧再到图生视频", "一次只修一个变量"]
+    },
+    {
+      "id": "seedance-skill-directing",
+      "title": "Seedance 2.0 Skill",
+      "url": "https://github.com/Emily2040/seedance-2.0",
+      "type": "github",
+      "authority": "社区",
+      "license": "MIT",
+      "usedFor": ["可见叙事节拍", "主体、道具、相机、环境运动分离", "返修诊断"]
+    },
+    {
+      "id": "create-storyboard-skill",
+      "title": "Create Storyboard Skill",
+      "url": "https://github.com/TateZhouSiu/create-storyboard-skill",
+      "type": "github",
+      "authority": "社区",
+      "license": "MIT",
+      "usedFor": ["跨镜连续性清单", "人物、服装、道具、场景地理与光向锚点"]
+    },
+    {
+      "id": "seedance-prompt-library",
+      "title": "Seedance Prompt Library",
+      "url": "https://github.com/Ericgood/seedance-prompt",
+      "type": "github-dataset",
+      "authority": "社区",
+      "license": "CC BY 4.0",
+      "usedFor": ["数据字段结构参考；未复制提示词正文"]
+    },
+    {
+      "id": "seaart-storyboard-prompt-assistant",
+      "title": "Storyboard Prompt Assistant Skill",
+      "url": "https://github.com/seaartpublic/skills/blob/main/storyboard-prompt-assistant/SKILL.md",
+      "type": "github",
+      "authority": "SeaArt Public Skills",
+      "license": "仓库公开许可；仅提炼工作流与字段规则",
+      "usedFor": ["单镜可执行视觉节拍", "参考图职责标签", "全局风格锁", "人物服装与道具状态分离"]
+    },
+    {
+      "id": "ai-storyboard-director",
+      "title": "AI Storyboard Director",
+      "url": "https://github.com/62656456/ai-film-skills/blob/main/docs/skills/en/ai-storyboard-director.md",
+      "type": "github",
+      "authority": "AI Film Skills",
+      "license": "仓库公开许可；仅提炼导演与连续性方法",
+      "usedFor": ["先调度后镜头", "固定世界坐标", "动作起点触发阶段与终点", "空间和光向连续性检查"]
+    },
+    {
+      "id": "agentara-video-storyboard",
+      "title": "Video Storyboard Skill",
+      "url": "https://github.com/agentara/skills/blob/main/skills/aigc/video-storyboard/SKILL.md",
+      "type": "github",
+      "authority": "Agentara Skills",
+      "license": "仓库公开许可；仅提炼参考图与分镜一致性方法",
+      "usedFor": ["已有角色图作为身份参考", "服装材质锁定", "分镜差异化与连续性并存", "负向约束检查"]
+    }
+  ]
+}
