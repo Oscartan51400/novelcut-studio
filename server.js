@@ -1946,13 +1946,32 @@ function wrapCardLine(value, limit = 16) {
   return lines;
 }
 
-async function renderPostProductionShot(shotId) {
+function normalizeTitleCardStyle(value, fallback = {}) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const previous = fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+  const color = (candidate, defaultValue) => /^#[0-9a-f]{6}$/i.test(String(candidate || "")) ? String(candidate).toLowerCase() : defaultValue;
+  return {
+    backgroundColor: color(input.backgroundColor ?? previous.backgroundColor, "#090b0e"),
+    titleColor: color(input.titleColor ?? previous.titleColor, "#db3029"),
+    bodyColor: color(input.bodyColor ?? previous.bodyColor, "#f5f5f5"),
+    captionColor: color(input.captionColor ?? previous.captionColor, "#a6a6a6"),
+    alignment: ["center", "left"].includes(input.alignment ?? previous.alignment) ? (input.alignment ?? previous.alignment) : "center",
+    titleScale: ["compact", "standard", "large"].includes(input.titleScale ?? previous.titleScale) ? (input.titleScale ?? previous.titleScale) : "standard"
+  };
+}
+
+function ffmpegColor(value) {
+  return `0x${String(value || "#000000").replace(/^#/, "")}`;
+}
+
+async function renderPostProductionShot(shotId, payload = {}) {
   const shot = db.prepare(`SELECT shots.*, projects.id AS project_id, projects.aspect_ratio
     FROM shots JOIN sequences ON sequences.id = shots.sequence_id
     JOIN projects ON projects.id = sequences.project_id
     WHERE shots.id = ? AND projects.deleted_at = ''`).get(shotId);
   if (!shot) throw Object.assign(new Error("镜头不存在"), { statusCode: 404 });
-  if (!safeJson(shot.generation_meta_json || "{}", {}).postOnly) {
+  const generationMeta = safeJson(shot.generation_meta_json || "{}", {});
+  if (!generationMeta.postOnly) {
     throw Object.assign(new Error("只有后期镜头可以在本地生成字幕卡。"), { statusCode: 409 });
   }
   if (spawnSync(ffmpegPath, ["-version"], { stdio: "ignore" }).status !== 0) {
@@ -1962,6 +1981,7 @@ async function renderPostProductionShot(shotId) {
   const ratio = String(shot.aspect_ratio || "9:16");
   const size = ratio === "16:9" ? "1280x720" : ratio === "1:1" ? "1080x1080" : "720x1280";
   const duration = clamp(shot.edit_duration_sec || 3, 1, 60);
+  const titleCardStyle = normalizeTitleCardStyle(payload.style, generationMeta.titleCard);
   const quoted = [...String(shot.prompt || "").matchAll(/[“\"]([^”\"]{2,120})[”\"]/g)].map((match) => match[1]);
   const cardLines = (quoted.length ? quoted.slice(0, 3) : [shot.title, String(shot.prompt || "").slice(0, 140)])
     .map((line) => String(line || "").trim()).filter(Boolean);
@@ -1971,21 +1991,36 @@ async function renderPostProductionShot(shotId) {
   const outputName = `${safeName(takeId)}-post.mp4`;
   const outputPath = path.join(folder, outputName);
   const textPath = path.join(folder, `${safeName(takeId)}-post.txt`);
+  const stylePath = path.join(folder, `${safeName(takeId)}-post-style.json`);
   await fsp.writeFile(textPath, cardLines.join("\n"), "utf8");
+  await fsp.writeFile(stylePath, JSON.stringify(titleCardStyle), "utf8");
   const fadeOut = Math.max(0, duration - 0.35);
   const [targetWidth, targetHeight] = size.split("x");
   const filters = spawnSync(ffmpegPath, ["-hide_banner", "-filters"], { encoding: "utf8" });
   const supportsDrawtext = /\sdrawtext\s/.test(String(filters.stdout || ""));
-  let videoInput = ["-f", "lavfi", "-i", `color=c=0x090b0e:s=${size}:r=30:d=${duration}`];
+  let videoInput = ["-f", "lavfi", "-i", `color=c=${ffmpegColor(titleCardStyle.backgroundColor)}:s=${size}:r=30:d=${duration}`];
   let visualFilter = `scale=${targetWidth}:${targetHeight},fade=t=in:st=0:d=0.25,fade=t=out:st=${fadeOut}:d=0.35`;
   if (supportsDrawtext) {
     const fontCandidates = ["/System/Library/Fonts/PingFang.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"];
     const font = fontCandidates.find((item) => fs.existsSync(item));
     const fontOption = font ? `fontfile='${font}'` : "font='Sans'";
-    visualFilter = `drawtext=${fontOption}:textfile='${textPath}':fontcolor=white:fontsize=${ratio === "16:9" ? 40 : 42}:line_spacing=20:x=(w-text_w)/2:y=(h-text_h)/2:borderw=1:bordercolor=black@0.65,${visualFilter}`;
+    const scale = titleCardStyle.titleScale === "compact" ? 0.82 : titleCardStyle.titleScale === "large" ? 1.18 : 1;
+    const baseSize = ratio === "16:9" ? 40 : 42;
+    const x = titleCardStyle.alignment === "left" ? "w*0.11" : "(w-text_w)/2";
+    const lineFiles = [];
+    for (let lineIndex = 0; lineIndex < Math.min(cardLines.length, 3); lineIndex += 1) {
+      const linePath = path.join(folder, `${safeName(takeId)}-post-line-${lineIndex + 1}.txt`);
+      await fsp.writeFile(linePath, cardLines[lineIndex], "utf8");
+      lineFiles.push(linePath);
+    }
+    const colors = [titleCardStyle.titleColor, titleCardStyle.bodyColor, titleCardStyle.captionColor];
+    const sizes = [Math.round(baseSize * 1.55 * scale), Math.round(baseSize * scale), Math.round(baseSize * 0.76 * scale)];
+    const positions = ["h*0.37", "h*0.50", "h*0.61"];
+    const drawFilters = lineFiles.map((linePath, lineIndex) => `drawtext=${fontOption}:textfile='${linePath}':fontcolor=${ffmpegColor(colors[lineIndex])}:fontsize=${sizes[lineIndex]}:x=${x}:y=${positions[lineIndex]}:borderw=1:bordercolor=black@0.55`);
+    visualFilter = `${drawFilters.join(",")},${visualFilter}`;
   } else if (process.platform === "darwin" && fs.existsSync("/usr/bin/swift")) {
     const cardPath = path.join(folder, `${safeName(takeId)}-post.png`);
-    await runProcess("/usr/bin/swift", [path.join(rootDir, "scripts", "render-title-card.swift"), cardPath, targetWidth, targetHeight, textPath], 2 * 60 * 1000);
+    await runProcess("/usr/bin/swift", [path.join(rootDir, "scripts", "render-title-card.swift"), cardPath, targetWidth, targetHeight, textPath, stylePath], 2 * 60 * 1000);
     videoInput = ["-loop", "1", "-framerate", "30", "-i", cardPath];
   } else {
     throw Object.assign(new Error("当前 FFmpeg 不支持 drawtext，且没有可用的系统文字渲染器。"), { statusCode: 503 });
@@ -2007,14 +2042,15 @@ async function renderPostProductionShot(shotId) {
       VALUES (?, ?, ?, 'succeeded', ?, ?, 1, 0, '本地后期字幕卡', ?, ?)`).run(
         takeId, shotId, takeNo, localUrl, shot.prompt || shot.title, timestamp, timestamp
       );
-    db.prepare("UPDATE shots SET preferred_take_id = ?, updated_at = ? WHERE id = ?").run(takeId, timestamp, shotId);
+    db.prepare("UPDATE shots SET preferred_take_id = ?, generation_meta_json = ?, updated_at = ? WHERE id = ?")
+      .run(takeId, JSON.stringify({ ...generationMeta, titleCard: titleCardStyle }), timestamp, shotId);
     db.prepare("UPDATE projects SET updated_at = ? WHERE id = ?").run(timestamp, shot.project_id);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return { ok: true, takeId, videoUrl: localUrl, duration };
+  return { ok: true, takeId, videoUrl: localUrl, duration, style: titleCardStyle };
 }
 
 async function assembleProject(projectId) {
@@ -2370,7 +2406,8 @@ async function handleApi(req, res, url) {
 
   match = url.pathname.match(/^\/api\/shots\/([^/]+)\/render-post$/);
   if (req.method === "POST" && match) {
-    return sendJson(res, 201, await renderPostProductionShot(decodeURIComponent(match[1])));
+    const payload = await readJson(req);
+    return sendJson(res, 201, await renderPostProductionShot(decodeURIComponent(match[1]), payload));
   }
 
   match = url.pathname.match(/^\/api\/takes\/([^/]+)\/(approve|prefer|reject)$/);

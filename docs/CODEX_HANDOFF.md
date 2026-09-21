@@ -23,6 +23,9 @@ The composite-package implementation has these invariants:
 - Project production metadata is persisted and shown per shot in the inspector.
 - Local title cards are stored as successful preferred takes and participate in
   rough cut and assembly.
+- Title-card background, three text colors, alignment, and title scale are
+  editable. The normalized style is persisted in shot generation metadata and
+  is applied by both the FFmpeg and macOS AppKit renderer paths.
 
 ## Local Title Cards
 
@@ -80,11 +83,9 @@ warn about them rather than silently dropping content.
 
 ## Likely Next Work
 
-- Make title-card styling editable instead of deriving only text from the prompt.
 - Add local application of BGM, SFX, voice, and grading during final assembly;
   these are currently parsed, persisted, and displayed, but not mixed/rendered.
 - Add a platform-independent fallback renderer if Linux or Windows support is
   required.
 - Split `server.js` only when doing so reduces risk around parser, persistence,
   job, or media-processing boundaries; avoid unrelated rewrites.
-

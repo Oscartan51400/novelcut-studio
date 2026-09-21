@@ -668,6 +668,15 @@ function renderInspector(project, shot, take) {
   if (!shot) return `<aside class="inspector"></aside>`;
   const productionPanel = renderShotProduction(project, shot);
   if (shot.postOnly) {
+    const titleCardStyle = {
+      backgroundColor: "#090b0e",
+      titleColor: "#db3029",
+      bodyColor: "#f5f5f5",
+      captionColor: "#a6a6a6",
+      alignment: "center",
+      titleScale: "standard",
+      ...(shot.generationMeta?.titleCard || {})
+    };
     return `<aside class="inspector">
       <div class="panel-head"><h2>后期镜头</h2></div>
       <section class="inspector-section post-production-editor">
@@ -675,8 +684,19 @@ function renderInspector(project, shot, take) {
         <label class="field"><span>镜头标题</span><input data-shot-field="title" value="${escapeHtml(shot.title)}" /></label>
         <label class="field"><span>剪辑时长</span><input type="number" min="1" max="60" step="0.5" data-shot-field="editDuration" value="${escapeHtml(shot.editDuration || shot.duration)}" /></label>
         <label class="field"><span>字幕卡内容</span><textarea data-shot-field="prompt">${escapeHtml(shot.prompt)}</textarea></label>
+        <details class="compact-details title-card-settings" open>
+          <summary><span>字幕卡样式</span><small>本地渲染</small></summary>
+          <div class="title-card-style-grid">
+            <label class="field color-field"><span>背景</span><input type="color" data-title-card-style="backgroundColor" value="${escapeHtml(titleCardStyle.backgroundColor)}" /></label>
+            <label class="field color-field"><span>主标题</span><input type="color" data-title-card-style="titleColor" value="${escapeHtml(titleCardStyle.titleColor)}" /></label>
+            <label class="field color-field"><span>副标题</span><input type="color" data-title-card-style="bodyColor" value="${escapeHtml(titleCardStyle.bodyColor)}" /></label>
+            <label class="field color-field"><span>底部文字</span><input type="color" data-title-card-style="captionColor" value="${escapeHtml(titleCardStyle.captionColor)}" /></label>
+            <label class="field"><span>对齐</span><select data-title-card-style="alignment"><option value="center" ${titleCardStyle.alignment === "center" ? "selected" : ""}>居中</option><option value="left" ${titleCardStyle.alignment === "left" ? "selected" : ""}>左对齐</option></select></label>
+            <label class="field"><span>标题字号</span><select data-title-card-style="titleScale"><option value="compact" ${titleCardStyle.titleScale === "compact" ? "selected" : ""}>紧凑</option><option value="standard" ${titleCardStyle.titleScale === "standard" ? "selected" : ""}>标准</option><option value="large" ${titleCardStyle.titleScale === "large" ? "selected" : ""}>大标题</option></select></label>
+          </div>
+        </details>
         <button class="button primary" data-action="render-post" ${state.capabilities?.ffmpeg?.available ? "" : "disabled"}>${take ? "重新制作字幕卡" : "制作字幕卡"}</button>
-        <p class="hint">生成黑底文字视频并自动设为主选；可在粗剪中按实际剪辑时长播放。</p>
+        <p class="hint">按当前颜色、对齐与字号制作文字视频并自动设为主选；不消耗生成额度。</p>
       </section>
       ${productionPanel}
       ${take ? `<section class="inspector-section"><div class="section-title"><h3>当前后期版本</h3><span class="spacer"></span><span class="hint">TAKE ${String(take.no).padStart(2,"0")}</span></div><p class="hint">${escapeHtml(take.changeRequest || "本地后期字幕卡")}</p></section>` : ""}
@@ -1009,7 +1029,9 @@ async function renderPostShot() {
   if (!shot?.postOnly) return;
   try {
     await flushShotInputs(shot);
-    await api(`/api/shots/${encodeURIComponent(shot.id)}/render-post`, { method: "POST", body: "{}" });
+    const style = Object.fromEntries([...document.querySelectorAll("[data-title-card-style]")]
+      .map((input) => [input.dataset.titleCardStyle, input.value]));
+    await api(`/api/shots/${encodeURIComponent(shot.id)}/render-post`, { method: "POST", body: JSON.stringify({ style }) });
     await openProject(state.project.id, false, "workspace");
     toast("后期字幕卡已生成并设为主选");
   } catch (error) { toast(error.message, "error"); }
