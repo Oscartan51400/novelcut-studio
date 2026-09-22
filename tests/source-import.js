@@ -19,8 +19,8 @@ async function request(urlPath, options = {}) {
 async function main() {
   const indexHtml = fs.readFileSync(path.join(root, "public", "index.html"), "utf8");
   const appJs = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
-  assert.match(indexHtml, /id="sourceFileButton"[\s\S]*上传分镜文件/);
-  assert.match(indexHtml, /id="sourceFileInput"[^>]*accept="\.md,\.markdown,\.mdown,\.txt"/);
+  assert.match(indexHtml, /id="sourceFileButton"[\s\S]*上传完稿 \/ 分镜/);
+  assert.match(indexHtml, /id="sourceFileInput"[^>]*accept="\.docx,\.md,\.markdown,\.mdown,\.txt"/);
   assert.match(indexHtml, /id="sourceFolderButton"[\s\S]*导入整个文件夹/);
   assert.match(indexHtml, /文件置灰是正常的/);
   assert.match(appJs, /data-action="generate-all-assets"/, "资产页应提供一键生成全部缺失资产按钮");

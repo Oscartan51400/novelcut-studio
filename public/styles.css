@@ -348,6 +348,23 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .preview-production { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; border: 1px solid var(--line); border-radius: 7px; padding: 7px 8px; color: var(--muted); font-size: 8px; }
 .preview-production strong { color: var(--text); margin-right: 3px; }
 .preview-production span { border-left: 1px solid var(--line); padding-left: 6px; }
+.preview-series { margin-top: 9px; border: 1px solid rgba(214,255,75,.18); border-radius: 9px; background: rgba(214,255,75,.035); padding: 9px; }
+.preview-series > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 9px; }
+.preview-series > div:first-child span { color: var(--muted); }
+.preview-episodes { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; margin-top: 7px; }
+.preview-episodes span { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 6px; align-items: center; border-radius: 7px; background: #15191e; padding: 6px 7px; color: var(--muted); font-size: 8px; }
+.preview-episodes b { color: var(--accent); }
+.preview-episodes i { color: var(--muted-2); font-style: normal; }
+.preview-health { margin-top: 9px; border: 1px solid var(--line); border-radius: 9px; padding: 9px; font-size: 9px; }
+.preview-health.blocking { border-color: rgba(255,104,104,.34); background: rgba(255,76,76,.055); }
+.preview-health.ready { border-color: rgba(104,224,158,.25); background: rgba(104,224,158,.045); }
+.preview-health > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.preview-health > div span { color: var(--muted); }
+.preview-health p { display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 6px; margin: 6px 0 0; color: var(--muted); line-height: 1.45; }
+.preview-health p b { color: #ffc18f; }
+.preview-health p.error b { color: #ff8b8b; }
+.risk-confirm { display: flex; align-items: flex-start; gap: 7px; margin-top: 9px; border-top: 1px solid rgba(255,255,255,.08); padding-top: 8px; color: var(--text); line-height: 1.45; cursor: pointer; }
+.risk-confirm input { margin-top: 1px; accent-color: var(--accent); }
 .source-import-help { margin: 8px 1px 0; color: var(--muted-2); font-size: 9px; line-height: 1.5; }
 .source-picker-help { margin: 8px 1px 0; border-radius: 8px; background: rgba(214,255,75,.045); padding: 7px 9px; color: var(--muted); font-size: 9px; line-height: 1.55; }
 .source-picker-help strong { color: var(--text); }
@@ -453,6 +470,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .source-import-actions { grid-template-columns: 1fr 1fr; }
   .source-path-input { grid-column: 1 / -1; }
   .preview-shots { grid-template-columns: 1fr; }
+  .preview-episodes { grid-template-columns: 1fr; }
   .project-list { grid-template-columns: 1fr; }
   .workspace { display: block; height: auto; min-height: 100vh; padding-bottom: 58px; }
   .topbar { min-height: 68px; height: auto; padding: 10px 12px; flex-wrap: wrap; }

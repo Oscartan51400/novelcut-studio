@@ -143,7 +143,17 @@ function toast(message, type = "", action = null) {
 }
 
 function sourceFileAllowed(name = "") {
-  return /\.(?:md|markdown|mdown|txt)$/i.test(String(name));
+  return /\.(?:docx|md|markdown|mdown|txt)$/i.test(String(name));
+}
+
+function bufferToBase64(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function currentSourceMode() {
@@ -201,7 +211,7 @@ function applyImportedSources(items, label) {
   }
   sourceTextDirty = false;
   if (createMode === "project" && !createForm.elements.name.value.trim()) {
-    createForm.elements.name.value = (cleanItems[0].name || "新短剧").replace(/\.(?:md|markdown|mdown|txt)$/i, "");
+    createForm.elements.name.value = (cleanItems[0].name || "新短剧").replace(/\.(?:docx|md|markdown|mdown|txt)$/i, "");
   }
   lastSourceDescription = `${label}（${cleanItems.length} 个文件）`;
   setSourceStatus(`${lastSourceDescription} · 正在解析…`, "ready");
@@ -214,16 +224,19 @@ async function loadSourceFiles(fileList) {
   if (!files.length) return;
   const unsupported = files.filter((file) => !sourceFileAllowed(file.name));
   const valid = files.filter((file) => sourceFileAllowed(file.name));
-  if (!valid.length) throw new Error("没有找到 .md、.markdown、.mdown 或 .txt 文件");
+  if (!valid.length) throw new Error("没有找到 .docx、.md、.markdown、.mdown 或 .txt 文件");
   if (valid.length > 80) throw new Error("一次最多导入 80 个文本文件");
   if (valid.reduce((sum, file) => sum + file.size, 0) > maxSourceFileBytes) throw new Error("导入文件总计超过 6MB，请减少文件后再试");
-  const items = await Promise.all(valid.map(async (file) => ({
-    name: file.name,
-    relativePath: file.webkitRelativePath || file.name,
-    size: file.size,
-    text: await file.text(),
-    kind: "upload"
-  })));
+  const items = await Promise.all(valid.map(async (file) => {
+    if (/\.docx$/i.test(file.name)) {
+      const data = await api("/api/source-files/upload", {
+        method: "POST",
+        body: JSON.stringify({ name: file.name, dataBase64: bufferToBase64(await file.arrayBuffer()) })
+      });
+      return { ...data.files[0], name: file.name, relativePath: file.webkitRelativePath || file.name, size: file.size, kind: "upload" };
+    }
+    return { name: file.name, relativePath: file.webkitRelativePath || file.name, size: file.size, text: await file.text(), kind: "upload" };
+  }));
   applyImportedSources(items, fileList.length > 1 ? "批量文件" : valid[0].name);
   if (unsupported.length) toast(`已跳过 ${unsupported.length} 个不支持的文件`, "error");
 }
@@ -257,18 +270,27 @@ async function refreshSourcePreview() {
   try {
     const preview = await api("/api/source/preview", { method: "POST", body: JSON.stringify({ sourceText: text }) });
     const warnings = preview.warnings.length
-      ? `<div class="preview-warnings"><strong>${preview.warnings.length} 项需要确认</strong>${preview.warnings.map((warning) => `<span>${escapeHtml(warning)}</span>`).join("")}</div>`
+      ? `<div class="preview-warnings"><strong>${preview.warnings.length} 项需要确认</strong>${preview.warnings.slice(0, 12).map((warning) => `<span>${escapeHtml(warning)}</span>`).join("")}${preview.warnings.length > 12 ? `<span>另有 ${preview.warnings.length - 12} 项逐镜提示，创建后可在工作台继续处理。</span>` : ""}</div>`
       : '<div class="preview-ok">未发现明显格式问题</div>';
     const assetGroups = [["character", "人物"], ["scene", "场景"], ["prop", "道具"]].map(([type, label]) => {
       const names = (preview.assets || []).filter((asset) => asset.type === type && asset.role !== "view").map((asset) => asset.name);
       return names.length ? `<span><b>${label}</b>${names.map(escapeHtml).join("、")}</span>` : "";
     }).join("");
     const production = preview.production || {};
-    const productionSummary = production.mode === "composite"
+    const productionSummary = ["composite", "series_bible"].includes(production.mode)
       ? `<div class="preview-production"><strong>制作清单</strong><span>${production.voices?.length || 0} 配音角色</span><span>${production.bgm?.length || 0} 段 BGM</span><span>${production.sfx?.length || 0} 条音效</span><span>${production.grading?.length || 0} 组调色</span><span>${production.effects?.length || 0} 项特效</span></div>`
+      : "";
+    const seriesPlan = production.mode === "series_bible"
+      ? `<div class="preview-series"><div><strong>${escapeHtml(production.series?.title || "系列完稿")}</strong><span>${production.episodes?.length || 0} 集可执行内容 · ${production.transitions?.length || 0} 个转场关系</span></div><div class="preview-episodes">${(production.episodes || []).map((episode) => `<span><b>第${episode.number}集</b>${escapeHtml(episode.title)}<i>${episode.shotCount} 镜 · ${episode.editDuration}s · ${episode.transitionCount} 转场</i></span>`).join("")}</div></div>`
+      : "";
+    const healthIssues = preview.importHealth?.issues || [];
+    const health = production.mode === "series_bible"
+      ? `<div class="preview-health ${preview.requiresConfirmation ? "blocking" : "ready"}"><div><strong>完稿体检</strong><span>${preview.requiresConfirmation ? `${preview.importHealth.blockingIssues.length} 类严重问题，创建前需要确认` : "结构检查通过"}</span></div>${healthIssues.map((issue) => `<p class="${escapeHtml(issue.level)}"><b>${issue.level === "error" ? "阻断" : "提醒"}</b>${escapeHtml(issue.message)}</p>`).join("")}${preview.requiresConfirmation ? '<label class="risk-confirm"><input type="checkbox" name="confirmSourceRisks" />我已查看问题，同意使用系统修复后的提示词和转场分类创建项目</label>' : ""}</div>`
       : "";
     sourcePreview.innerHTML = `<div class="preview-head"><strong>解析预览</strong><span>${preview.shotCount} 镜头 · ${preview.characterCount} 人物 · ${preview.sceneCount} 场景 · ${preview.propCount || 0} 道具</span></div>
       <div class="preview-kb"><span>知识库体检 ${escapeHtml(preview.knowledge.version)}</span><b>平均 ${preview.knowledge.averageScore} 分</b><small>${preview.knowledge.reviewCount} 镜需确认${preview.knowledge.blockedCount ? ` · ${preview.knowledge.blockedCount} 镜缺关键内容` : ""}</small></div>
+      ${seriesPlan}
+      ${health}
       ${assetGroups ? `<div class="preview-assets">${assetGroups}</div>` : ""}
       ${preview.characterViewCount || preview.sceneViewCount ? `<div class="preview-views">另生成 ${preview.characterViewCount || 0} 个人物逐镜视觉和 ${preview.sceneViewCount || 0} 个场景逐镜视觉，不计入人物/场景基准。</div>` : ""}
       ${productionSummary}
@@ -1286,6 +1308,7 @@ createForm.addEventListener("submit", async (event) => {
   try {
     const preview = await refreshSourcePreview();
     if (!preview?.shotCount) throw new Error("没有识别到可创建的分镜，请先检查解析预览");
+    if (preview.requiresConfirmation && payload.confirmSourceRisks !== "on") throw new Error("请先查看完稿体检，并确认使用系统修复方案后再创建");
     submit.disabled = true;
     submit.textContent = createMode === "append" ? "正在追加分镜…" : "正在整理项目…";
     const previousCount = flattenShots().length;
@@ -1317,7 +1340,7 @@ sourceFileInput.addEventListener("change", async () => {
 });
 
 document.querySelector("#sourceFileButton").addEventListener("pointerdown", () => {
-  setSourceStatus("请选择 .md / .markdown / .txt 文件，可一次多选");
+  setSourceStatus("请选择 .docx / .md / .markdown / .txt 文件，可一次多选");
 });
 
 document.querySelector("#sourceFolderButton").addEventListener("pointerdown", () => {
