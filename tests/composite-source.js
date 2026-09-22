@@ -43,9 +43,15 @@ async function main() {
   assert.match(rejected.body.error, /声明 3 个镜头.*识别到 2 个/);
 
   const appJs = fs.readFileSync(path.join(root, "public", "app.js"), "utf8");
+  const serverJs = fs.readFileSync(path.join(root, "server.js"), "utf8");
+  const swiftRenderer = fs.readFileSync(path.join(root, "scripts", "render-title-card.swift"), "utf8");
   assert.match(appJs, /data-action="render-post"/, "工作台应提供后期字幕卡制作入口");
   assert.match(appJs, /本镜后期清单/, "工作台应展示每镜配音、BGM、音效和调色清单");
-  console.log(JSON.stringify({ ok: true, checks: 20, covered: ["复合章节边界", "镜号标题", "视觉人物", "OS配音角色", "身份与逐镜资产分计", "BGM", "音效", "调色", "字幕", "剪辑时长", "生成时长", "后期镜头", "异常镜数阻断"] }, null, 2));
+  assert.match(appJs, /data-title-card-style="backgroundColor"/, "字幕卡应允许编辑背景色");
+  assert.match(appJs, /data-title-card-style="alignment"/, "字幕卡应允许编辑版式对齐");
+  assert.match(serverJs, /normalizeTitleCardStyle/, "服务端应校验并持久化字幕卡样式");
+  assert.match(swiftRenderer, /TitleCardStyle/, "macOS 本地渲染器应读取字幕卡样式");
+  console.log(JSON.stringify({ ok: true, checks: 24, covered: ["复合章节边界", "镜号标题", "视觉人物", "OS配音角色", "身份与逐镜资产分计", "BGM", "音效", "调色", "字幕", "剪辑时长", "生成时长", "后期镜头", "字幕卡样式", "异常镜数阻断"] }, null, 2));
 }
 
 main().catch((error) => {

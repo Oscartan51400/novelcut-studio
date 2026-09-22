@@ -38,9 +38,9 @@
               </div>
             </div>
             <div class="source-import-actions">
-              <label id="sourceFileButton" class="button source-file-button" title="选择一个或多个 Markdown/TXT 分镜文件">
-                上传分镜文件
-                <input id="sourceFileInput" type="file" multiple accept=".md,.markdown,.mdown,.txt" aria-describedby="sourcePickerHelp" />
+              <label id="sourceFileButton" class="button source-file-button" title="选择一个或多个 DOCX、Markdown 或 TXT 制作文件">
+                上传完稿 / 分镜
+                <input id="sourceFileInput" type="file" multiple accept=".docx,.md,.markdown,.mdown,.txt" aria-describedby="sourcePickerHelp" />
               </label>
               <label id="sourceFolderButton" class="button ghost source-folder-button" title="选择整个文件夹；在此模式下文件会置灰，这是系统正常行为">
                 导入整个文件夹
@@ -52,8 +52,8 @@
             <div id="sourceList" class="source-list" hidden></div>
             <textarea name="sourceText" required rows="16" placeholder="也可以直接粘贴故事梗概、人物设定、场景设定和逐镜提示词……"></textarea>
             <div id="sourcePreview" class="source-preview" hidden></div>
-            <p id="sourcePickerHelp" class="source-picker-help"><strong>导入单个 MD：</strong>点“上传分镜文件”。<strong>导入文件夹：</strong>点“导入整个文件夹”；此时文件置灰是正常的，请直接选中所在文件夹。</p>
-            <p class="source-import-help">支持多选与拖入；文件夹最多扫描 4 层、80 个文本文件，总计最大 6MB。创建/追加前会显示解析结果与时长调整。</p>
+            <p id="sourcePickerHelp" class="source-picker-help"><strong>导入 DOCX/MD：</strong>点“上传完稿 / 分镜”。<strong>导入文件夹：</strong>点“导入整个文件夹”；此时文件置灰是正常的，请直接选中所在文件夹。</p>
+            <p class="source-import-help">支持复合 DOCX、Markdown、TXT、多选与拖入；文件夹最多扫描 4 层、80 个文件，总计最大 6MB。系统会先做完稿体检，不会把剪辑转场直接当作视频任务。</p>
           </div>
           <label class="field" data-create-only>
             <span>画幅</span>
@@ -115,6 +115,9 @@
     </dialog>
     <dialog id="promptDialog" class="modal prompt-modal">
       <div id="promptDialogContent"></div>
+    </dialog>
+    <dialog id="transitionDialog" class="modal transition-modal">
+      <div id="transitionDialogContent"></div>
     </dialog>
     <script src="/app.js"></script>
   </body>

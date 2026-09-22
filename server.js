@@ -312,6 +312,243 @@ function firstFence(block) {
   return match ? cleanMarkdown(match[1]) : "";
 }
 
+function sourceLineText(value) {
+  return String(value || "").replace(/^#{1,6}\s*/, "").replace(/^[-*]\s+/, "").trim();
+}
+
+function maxPromptTimelineSecond(value) {
+  return [...String(value || "").matchAll(/(\d+(?:\.\d+)?)\s*(?:至|[-–—~])\s*(\d+(?:\.\d+)?)\s*秒/g)]
+    .reduce((maximum, match) => Math.max(maximum, Number(match[2]) || 0), 0);
+}
+
+function compileSplitShotPrompt(rawPrompt, editDuration, timeline, camera, sound) {
+  const raw = cleanMarkdown(rawPrompt);
+  const maximum = maxPromptTimelineSecond(raw);
+  if (!raw || maximum <= Number(editDuration || 0)) return { prompt: raw, repaired: false, sourceMaximum: maximum };
+  const duration = Number(editDuration || 5);
+  const firstTimeline = raw.search(/\d+(?:\.\d+)?\s*至\s*\d+(?:\.\d+)?\s*秒[：:，,]/);
+  let prefix = firstTimeline > 0 ? raw.slice(0, firstTimeline) : raw.split(/[。！？]/).slice(0, 2).join("。");
+  prefix = prefix.replace(/\d+(?:\.\d+)?秒单一连续电影镜头/, `${duration}秒单一连续电影镜头`)
+    .replace(/\s+$/, "");
+  const authoredAction = String(timeline || "").replace(/^\s*\d+(?:\.\d+)?\s*(?:至|[-–—~])\s*\d+(?:\.\d+)?\s*秒\s*[｜|:：]?\s*/, "").trim();
+  const styleIndex = raw.lastIndexOf("35mm");
+  const tailSource = styleIndex >= 0 ? raw.slice(styleIndex) : raw;
+  const audio = (tailSource.match(/音频[：:]([\s\S]*?)(?=禁止|$)/)?.[1] || sound || "").trim();
+  const negative = (tailSource.match(/(禁止[\s\S]*)$/)?.[1] || "").trim();
+  const parts = [
+    prefix || `${duration}秒单一连续电影镜头，无切镜。`,
+    `0至${duration}秒：${authoredAction || "只执行本子镜头规定的动作，不重复父镜头前段内容"}。`,
+    camera ? `镜头：${camera}。` : "",
+    audio ? `音频：${audio.replace(/[。；]+$/, "")}。` : "",
+    negative
+  ].filter(Boolean);
+  return { prompt: parts.join(" ").replace(/\s+/g, " ").trim(), repaired: true, sourceMaximum: maximum };
+}
+
+function parseSeriesBibleSource(source) {
+  const shotHeadingCount = [...String(source || "").matchAll(/^(?:#{1,6}\s*)?镜头\s*[0-9]+[A-Za-z]?\s*｜/gm)].length;
+  if (shotHeadingCount < 5 || !/(?:LOC|PROP)-\d{2}/.test(source) || !/(?:视觉圣经|通用生产规范|创作圣经)/.test(source)) return null;
+
+  const lines = String(source || "").split("\n");
+  const title = lines.map(sourceLineText).find((line) => line && !line.startsWith("<!--") && !/^目录$/.test(line)) || "未命名系列";
+  const season = (source.match(/第([一二三四五六七八九十\d]+)季/) || [0, "一"])[1];
+  const versionMatches = lines.slice(0, 50).map(sourceLineText).flatMap((line) => {
+    const match = line.match(/(?:第一季.*?\bv|^版本\s*v)(\d+(?:\.\d+)?)/i);
+    return match ? [match[1]] : [];
+  });
+  const episodeTitles = new Map();
+  for (const match of source.matchAll(/第\s*(\d+)\s*集《([^》]+)》/g)) {
+    if (!episodeTitles.has(Number(match[1]))) episodeTitles.set(Number(match[1]), match[2].trim());
+  }
+
+  const assetRecords = new Map();
+  const upsertAsset = (sourceId, name, description = "") => {
+    if (!sourceId || !name) return;
+    const type = sourceId.startsWith("LOC-") ? "scene" : sourceId.startsWith("PROP-") ? "prop" : "character";
+    const previous = assetRecords.get(sourceId) || {};
+    assetRecords.set(sourceId, {
+      sourceId, type, name: String(name).replace(/[（(].*$/, "").trim(),
+      description: [previous.description, description].filter(Boolean).join("；").slice(0, 1800),
+      audioOnly: Boolean(previous.audioOnly || /形象不出现|无需定妆照|仅出声音|仅\s*OS\s*配音/i.test(description)
+        || (/画外音/.test(description) && /配音|声音/.test(description))),
+      variantOf: previous.variantOf || "", variantKind: previous.variantKind || ""
+    });
+  };
+  for (const table of parseMarkdownTables(source)) {
+    for (const row of table.rows) {
+      const values = Object.values(row);
+      const sourceId = values.find((value) => /^(?:[A-Z]{2,10}|LOC|PROP)-\d{2}$/.test(String(value || "").trim()));
+      if (!sourceId) continue;
+      const sourceIndex = values.indexOf(sourceId);
+      const name = values.slice(sourceIndex + 1).find((value) => String(value || "").trim()) || sourceId;
+      const description = Object.entries(row).filter(([, value]) => value && value !== sourceId && value !== name).map(([key, value]) => `${key}：${value}`).join("；");
+      upsertAsset(String(sourceId).trim(), String(name).trim(), description);
+    }
+  }
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = sourceLineText(lines[index]);
+    const match = line.match(/^((?:[A-Z]{2,10}|LOC|PROP)-\d{2})(?:\s+|[：:])(.+)$/)
+      || line.match(/^((?:[A-Z]{2,10}|LOC|PROP)-\d{2})(《.+)$/);
+    if (!match) continue;
+    const body = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const next = sourceLineText(lines[cursor]);
+      if (/^((?:[A-Z]{2,10}|LOC|PROP)-\d{2})(?:\s+|[：:]|《)/.test(next) || /^\d+\.\d+\s+/.test(next) || /^(?:镜头|转场镜头)\s*/.test(next)) break;
+      if (next && !next.startsWith("```")) body.push(next);
+      if (body.join("；").length > 1800) break;
+    }
+    const inlineParts = match[2].split(/[：:]/);
+    const inlineName = inlineParts.shift().trim();
+    upsertAsset(match[1], inlineName, [inlineParts.join("：").trim(), body.join("；")].filter(Boolean).join("；"));
+  }
+  for (const record of [...assetRecords.values()]) {
+    for (const match of String(record.description || "").matchAll(/([^，。；\n（）()]{2,18})[（(]([A-Z]{2,10}-\d{2})[）)]/g)) {
+      if (assetRecords.has(match[2])) continue;
+      upsertAsset(match[2], `${record.name} · ${match[1].trim()}`, `属于 ${record.sourceId} 的${match[1].trim()}视觉状态`);
+      const variant = assetRecords.get(match[2]);
+      variant.variantOf = record.sourceId;
+      variant.variantKind = match[1].trim();
+    }
+  }
+  for (const record of assetRecords.values()) {
+    const explicitAudioOnly = /^(?:CALL|VOICE|OS)-/i.test(record.sourceId)
+      || /接警员|旁白|画外音/.test(record.name)
+      || /形象不出现|无需定妆照|仅出声音|仅\s*OS\s*配音/i.test(record.description);
+    record.audioOnly = explicitAudioOnly;
+  }
+  if (/玉扳指视界/.test(source) && ![...assetRecords.values()].some((record) => record.name === "玉扳指视界")) {
+    upsertAsset("LOC-VISION-01", "玉扳指视界", "黑白水墨视觉空间，关键道具保留低饱和颜色，边缘呈宣纸遇水晕染质感");
+  }
+
+  const assets = [...assetRecords.values()].filter((record) => !record.audioOnly).map((record) => ({
+    id: id("asset"), sourceId: record.sourceId, type: record.type, role: "identity", parentAssetId: "", shotNos: [],
+    name: record.name, aliases: [record.sourceId], description: record.description,
+    variantOf: record.variantOf, variantKind: record.variantKind, status: "draft", referenceUrl: "", version: 1
+  }));
+  const assetBySourceId = new Map(assets.map((asset) => [asset.sourceId, asset]));
+
+  const events = [];
+  let current = null;
+  for (const originalLine of lines) {
+    const line = sourceLineText(originalLine);
+    const transition = line.match(/^转场镜头\s*(T\d+)\s*｜\s*类型\s*([A-Z])\s*｜\s*([^｜]+)(?:｜\s*([\d.]+)s)?/i);
+    const shot = line.match(/^镜头\s*([0-9]+[A-Za-z]?)\s*｜\s*([^｜]+?)(?:\s*｜\s*原\s*([^｜]+))?$/i);
+    if (transition || shot) {
+      if (current) events.push(current);
+      current = transition
+        ? { kind: "transition", sourceId: transition[1], transitionType: transition[2].toUpperCase(), title: transition[3].trim(), headingDuration: Number(transition[4] || 0), lines: [] }
+        : { kind: "shot", sourceId: shot[1], title: shot[2].trim(), parentSourceId: String(shot[3] || "").trim(), lines: [] };
+      continue;
+    }
+    if (current) current.lines.push(originalLine);
+  }
+  if (current) events.push(current);
+
+  const shots = [];
+  const transitions = [];
+  const viewAssets = [];
+  let episodeNumber = 1;
+  let previousShot = null;
+  let pendingTransitions = [];
+  for (const event of events) {
+    const body = event.lines.join("\n");
+    if (event.kind === "transition") {
+      const duration = Number((extractField(body, ["时长"]).match(/[\d.]+/) || [event.headingDuration || 0])[0]);
+      const method = extractField(body, ["转场方式", "方式"]);
+      const functionText = extractField(body, ["剧情功能", "功能"]);
+      const prompt = firstFence(body) || extractField(body, ["Seedance 提示词", "提示词"]);
+      const execution = ["S", "M"].includes(event.transitionType) ? "generate"
+        : event.transitionType === "F" ? "audio" : event.transitionType === "E" ? "local_effect" : "edit";
+      const transitionRecord = { id: event.sourceId, type: event.transitionType, title: event.title, duration, method, function: functionText, prompt, execution, fromShot: previousShot?.sourceShotId || "", toShot: "", episodeNumber };
+      transitions.push(transitionRecord);
+      pendingTransitions.push(transitionRecord);
+      continue;
+    }
+    if (shots.length && /^0*1[A-Za-z]?$/i.test(event.sourceId) && previousShot && Number((previousShot.sourceShotId.match(/^\d+/) || [0])[0]) >= 10) episodeNumber += 1;
+    pendingTransitions.forEach((transition) => { transition.toShot = event.sourceId; transition.episodeNumber = episodeNumber; });
+    pendingTransitions = [];
+    const editDuration = Number((extractField(body, ["时长", "镜头时长"]).match(/[\d.]+/) || [5])[0]);
+    const sceneSourceId = extractField(body, ["场景", "地点"]).match(/(?:LOC-[A-Z0-9-]+|玉扳指视界)/)?.[0] || "";
+    const sceneAsset = assetBySourceId.get(sceneSourceId) || assets.find((asset) => asset.name === sceneSourceId);
+    const camera = extractField(body, ["景别与运镜", "景别", "运镜"]);
+    const storyFunction = extractField(body, ["剧情功能", "功能"]);
+    const timeline = extractField(body, ["时间轴"]);
+    const dialogue = extractField(body, ["台词", "对白"]);
+    const sound = extractField(body, ["声音设计", "音效"]);
+    const rawPrompt = firstFence(body) || extractField(body, ["Seedance 提示词", "视频提示词", "生成提示词"]);
+    const postOnly = /标题卡|黑屏设计|直接后期制作|不需\s*Seedance/i.test(`${event.title}\n${body}`);
+    const compiled = postOnly ? { prompt: rawPrompt || `本地后期：${event.title}`, repaired: false, sourceMaximum: 0 }
+      : compileSplitShotPrompt(rawPrompt, editDuration, timeline, camera, sound);
+    const referencedIds = [...new Set(`${body}\n${rawPrompt}`.match(/(?:[A-Z]{2,10}|LOC|PROP)-\d{2}/g) || [])];
+    const characterNames = referencedIds.map((sourceId) => assetBySourceId.get(sourceId)).filter((asset) => asset?.type === "character").map((asset) => asset.name);
+    const shotNo = shots.length + 1;
+    const shot = {
+      no: shotNo, sourceShotId: event.sourceId, title: event.title, prompt: compiled.prompt,
+      duration: postOnly ? normalizeShotDuration(editDuration) : normalizeShotDuration(editDuration), requestedDuration: editDuration, editDuration,
+      characters: [...new Set(characterNames)].join("、"), scene: sceneAsset?.name || sceneSourceId || "未指定场景",
+      sourceRow: { "景别与运镜": camera, "时间轴": timeline, "剧情功能": storyFunction },
+      generationMeta: {
+        postOnly, sourceShotId: event.sourceId, parentSourceId: event.parentSourceId, episodeNumber,
+        episodeTitle: episodeTitles.get(episodeNumber) || `第${episodeNumber}集`, camera, storyFunction, timeline, dialogue, sound,
+        rawPrompt, promptRepaired: compiled.repaired, sourceTimelineMaximum: compiled.sourceMaximum, referencedAssetIds: referencedIds
+      }
+    };
+    shots.push(shot);
+    previousShot = shot;
+    for (const sourceId of referencedIds) {
+      const parent = assetBySourceId.get(sourceId);
+      if (!parent || postOnly || !["character", "scene"].includes(parent.type)) continue;
+      viewAssets.push({
+        id: id("asset"), sourceId: `${sourceId}:${event.sourceId}`, type: parent.type, role: "view", parentAssetId: parent.id, shotNos: [shotNo],
+        name: `${parent.name} · ${event.sourceId}${parent.type === "character" ? "造型" : "视角"}`,
+        aliases: [], description: [`身份/空间基准：${parent.name}`, `分集：${episodeTitles.get(episodeNumber) || `第${episodeNumber}集`}`, `对应镜头：${event.title}`, camera, timeline].filter(Boolean).join("；").slice(0, 1600),
+        status: "draft", referenceUrl: "", version: 1
+      });
+    }
+  }
+
+  const countTable = parseMarkdownTables(source).find((table) => table.headers.some((header) => /v3.*子镜头|转场镜头|总执行/.test(header)));
+  const declaredEpisodes = (countTable?.rows || []).map((row) => {
+    const values = Object.values(row);
+    const episode = Number((values[0]?.match(/\d+/) || [0])[0]);
+    return { episode, childShots: Number(values[2] || 0), transitions: Number(values[3] || 0), total: Number(values[4] || 0) };
+  }).filter((item) => item.episode);
+  const declaredShotCount = declaredEpisodes.reduce((sum, item) => sum + item.childShots, 0);
+  const declaredTransitionCount = declaredEpisodes.reduce((sum, item) => sum + item.transitions, 0);
+  const replacementCharacters = (source.match(/\uFFFD/g) || []).length;
+  const timelineOverflowCount = shots.filter((shot) => shot.generationMeta.sourceTimelineMaximum > shot.editDuration).length;
+  const unresolvedAssetIds = [...new Set(shots.flatMap((shot) => shot.generationMeta.referencedAssetIds).filter((sourceId) => !assetBySourceId.has(sourceId)))];
+  const missingSections = [];
+  for (const chinese of ["一", "二", "三", "四", "五", "六", "七", "八", "九"]) {
+    const count = [...source.matchAll(new RegExp(`第${chinese}部分`, "g"))].length;
+    if (count === 1 && new RegExp(`第${chinese}部分`).test(source.slice(0, Math.min(source.length, 2500)))) missingSections.push(`第${chinese}部分`);
+  }
+  const issues = [];
+  if (declaredShotCount && declaredShotCount !== shots.length) issues.push({ code: "shot_count_mismatch", level: "error", message: `文档汇总声明 ${declaredShotCount} 个子镜头，实际识别到 ${shots.length} 个镜头。` });
+  if (declaredTransitionCount && declaredTransitionCount !== transitions.length) issues.push({ code: "transition_count_mismatch", level: "error", message: `文档汇总声明 ${declaredTransitionCount} 个转场，实际识别到 ${transitions.length} 个转场。` });
+  if (timelineOverflowCount) issues.push({ code: "timeline_overflow", level: "error", message: `${timelineOverflowCount} 个镜头的原提示词时间轴超过子镜头时长，系统已生成修复版提示词。` });
+  if (replacementCharacters) issues.push({ code: "replacement_characters", level: "error", message: `原文包含 ${replacementCharacters} 个乱码替换符（�）。` });
+  if (unresolvedAssetIds.length) issues.push({ code: "unresolved_assets", level: "error", message: `有 ${unresolvedAssetIds.length} 个资产编号未找到定义：${unresolvedAssetIds.join("、")}。` });
+  if (missingSections.length) issues.push({ code: "missing_sections", level: "warning", message: `目录列出但正文未检出：${missingSections.join("、")}。` });
+  if (new Set(versionMatches).size > 1) issues.push({ code: "version_conflict", level: "warning", message: `文档存在多个版本标识：${[...new Set(versionMatches)].map((item) => `v${item}`).join("、")}。` });
+  if (/每个镜头至少\s*10\s*秒/.test(source) && /[≤<＝=]\s*10\s*秒|不超过\s*10\s*秒/.test(source)) issues.push({ code: "duration_rule_conflict", level: "warning", message: "文档同时出现“至少10秒”和“不超过10秒”的镜头规则。" });
+
+  const episodeStats = [...new Set(shots.map((shot) => shot.generationMeta.episodeNumber))].map((number) => {
+    const episodeShots = shots.filter((shot) => shot.generationMeta.episodeNumber === number);
+    return { number, title: episodeTitles.get(number) || `第${number}集`, shotCount: episodeShots.length, editDuration: episodeShots.reduce((sum, shot) => sum + shot.editDuration, 0), transitionCount: transitions.filter((transition) => transition.episodeNumber === number).length };
+  });
+  const voices = [...assetRecords.values()].filter((record) => record.type === "character").map((record) => ({ name: record.name, sourceId: record.sourceId, audioOnly: record.audioOnly }));
+  return {
+    summary: cleanMarkdown(source).slice(0, 1200), shots, assets: [...assets, ...viewAssets],
+    production: {
+      mode: "series_bible", series: { title, season, versions: [...new Set(versionMatches)] }, episodes: episodeStats, transitions, voices,
+      expectedShotCount: declaredShotCount || shots.length, expectedTransitionCount: declaredTransitionCount || transitions.length,
+      bgm: [], sfx: [], grading: [], gradeParameters: [], subtitles: {}, effects: [], voiceLines: [], replacementCharacters,
+      importHealth: { issues, blockingIssues: issues.filter((issue) => issue.level === "error"), timelineOverflowCount, unresolvedAssetIds, missingSections }
+    }
+  };
+}
+
 function cleanArchiveName(value, prefixPattern) {
   return String(value || "")
     .replace(prefixPattern, "")
@@ -532,8 +769,10 @@ function propDescriptionFromSource(source, names) {
 function parseSource(sourceText) {
   const source = String(sourceText || "").replace(/\r\n/g, "\n").trim();
   if (!source) {
-    throw Object.assign(new Error("分镜内容不能为空，请粘贴内容或导入 Markdown/TXT 文件"), { statusCode: 422 });
+    throw Object.assign(new Error("分镜内容不能为空，请粘贴内容或导入 Markdown/TXT/DOCX 文件"), { statusCode: 422 });
   }
+  const seriesBible = parseSeriesBibleSource(source);
+  if (seriesBible) return seriesBible;
   const composite = parseCompositeSource(source);
   if (composite) {
     if (composite.production.expectedShotCount && composite.production.expectedShotCount !== composite.shots.length) {
@@ -947,6 +1186,9 @@ function previewSource(sourceText) {
   if (parsed.production?.replacementCharacters) {
     warnings.push(`原文包含 ${parsed.production.replacementCharacters} 个乱码替换符（�），建议回源修复，以免影响台词和提示词。`);
   }
+  for (const issue of parsed.production?.importHealth?.issues || []) {
+    if (!warnings.includes(issue.message)) warnings.push(issue.message);
+  }
   const localImageRefs = [...String(sourceText || "").matchAll(/!\[[^\]]*\]\((?!https?:\/\/|data:)([^)]+)\)/gi)];
   if (localImageRefs.length) {
     warnings.push(`检测到 ${localImageRefs.length} 个相对图片引用；当前会保留路径，但不会自动把图片设为人物或场景参考图。`);
@@ -976,6 +1218,8 @@ function previewSource(sourceText) {
       promptReview: knowledgeReviews.find((review) => review.no === shot.no)
     })),
     warnings,
+    requiresConfirmation: Boolean(parsed.production?.importHealth?.blockingIssues?.length),
+    importHealth: parsed.production?.importHealth || { issues: [], blockingIssues: [] },
     production: parsed.production,
     knowledge: {
       version: promptKnowledge.meta.version,
@@ -1029,6 +1273,7 @@ function mergeProduction(existingValue, incomingValue, shotOffset = 0) {
 function normalizeAssets(value) {
   return (Array.isArray(value) ? value : []).map((asset) => ({
     id: asset.id || id("asset"),
+    sourceId: String(asset.sourceId || ""),
     type: asset.type === "scene" ? "scene" : asset.type === "prop" ? "prop" : "character",
     name: String(asset.name || "未命名资产").trim(),
     aliases: [...new Set((Array.isArray(asset.aliases) ? asset.aliases : String(asset.aliases || "").split(/[、,，/]+/))
@@ -1037,6 +1282,8 @@ function normalizeAssets(value) {
     prompt: String(asset.prompt || "").trim(),
     role: asset.role === "view" ? "view" : "identity",
     parentAssetId: String(asset.parentAssetId || ""),
+    variantOf: String(asset.variantOf || ""),
+    variantKind: String(asset.variantKind || ""),
     shotNos: [...new Set((Array.isArray(asset.shotNos) ? asset.shotNos : []).map(Number).filter((item) => Number.isFinite(item)))],
     status: asset.status === "approved" ? "approved" : asset.status === "deprecated" ? "deprecated" : "draft",
     referenceUrl: String(asset.referenceUrl || asset.imageUrl || "").trim(),
@@ -1221,10 +1468,32 @@ function rebindProjectShots(projectId, force = false) {
   }
 }
 
+function requireSourceRiskConfirmation(parsed, payload) {
+  const blockers = parsed.production?.importHealth?.blockingIssues || [];
+  if (!blockers.length) return;
+  const confirmed = payload?.confirmSourceRisks === true || payload?.confirmSourceRisks === "on" || payload?.confirmSourceRisks === "true";
+  if (!confirmed) {
+    throw Object.assign(new Error(`完稿体检发现 ${blockers.length} 类严重问题，请在导入预览中确认“仍按系统修复方案创建”后继续。`), { statusCode: 409 });
+  }
+}
+
+function shotSequenceDescriptor(shot, fallbackIndex, append = false) {
+  const scene = String(shot.scene || "未指定场景").trim();
+  const episodeNumber = Number(shot.generationMeta?.episodeNumber || 0);
+  const episodeTitle = String(shot.generationMeta?.episodeTitle || "").trim();
+  const prefix = episodeNumber ? `第${episodeNumber}集${episodeTitle && episodeTitle !== `第${episodeNumber}集` ? `《${episodeTitle}》` : ""} · ` : "";
+  return {
+    key: `${episodeNumber || 0}:${scene}`,
+    scene,
+    name: `${prefix}${scene === "未指定场景" ? `${append ? "追加场次" : "场次"} ${fallbackIndex + 1}` : scene}`
+  };
+}
+
 function appendProjectShots(projectId, payload) {
   const project = db.prepare("SELECT * FROM projects WHERE id = ? AND deleted_at = ''").get(projectId);
   if (!project) throw Object.assign(new Error("项目不存在"), { statusCode: 404 });
   const parsed = parseSource(payload.sourceText || "");
+  requireSourceRiskConfirmation(parsed, payload);
   const createdAt = now();
   const sequenceStart = Number(db.prepare("SELECT COALESCE(MAX(sort_order), -1) AS value FROM sequences WHERE project_id = ?").get(projectId).value) + 1;
   const shotStart = Number(db.prepare(`SELECT COALESCE(MAX(shots.sort_order), -1) AS value FROM shots
@@ -1237,16 +1506,16 @@ function appendProjectShots(projectId, payload) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)`);
   let sequenceIndex = -1;
   let sequenceId = "";
-  let lastScene = null;
+  let lastSequenceKey = null;
   db.exec("BEGIN");
   try {
     parsed.shots.forEach((shot, index) => {
-      const scene = String(shot.scene || "未指定场景").trim();
-      if (!sequenceId || scene !== lastScene) {
+      const descriptor = shotSequenceDescriptor(shot, sequenceStart + sequenceIndex + 1, true);
+      if (!sequenceId || descriptor.key !== lastSequenceKey) {
         sequenceIndex += 1;
         sequenceId = id("sequence");
-        insertSequence.run(sequenceId, projectId, scene === "未指定场景" ? `追加场次 ${sequenceStart + sequenceIndex + 1}` : scene, scene, sequenceStart + sequenceIndex);
-        lastScene = scene;
+        insertSequence.run(sequenceId, projectId, descriptor.name, descriptor.scene, sequenceStart + sequenceIndex);
+        lastSequenceKey = descriptor.key;
       }
       insertShot.run(
         id("shot"), sequenceId, shotNoStart + index,
@@ -1276,6 +1545,7 @@ function createProject(payload) {
   const projectId = id("project");
   const createdAt = now();
   const parsed = parseSource(payload.sourceText || "");
+  requireSourceRiskConfirmation(parsed, payload);
   db.prepare(`INSERT INTO projects
     (id, name, source_text, story_summary, visual_style, aspect_ratio, resolution, audio_strategy, assets_json, production_json, source_manifest_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -1296,19 +1566,19 @@ function createProject(payload) {
     );
 
   let sequenceIndex = -1;
-  let lastScene = null;
+  let lastSequenceKey = null;
   let sequenceId = "";
   const insertSequence = db.prepare("INSERT INTO sequences (id, project_id, name, scene, sort_order) VALUES (?, ?, ?, ?, ?)");
   const insertShot = db.prepare(`INSERT INTO shots
     (id, sequence_id, shot_no, title, prompt, duration_sec, edit_duration_sec, generation_meta_json, characters, scene, status, sort_order, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)`);
   parsed.shots.forEach((shot, index) => {
-    const scene = String(shot.scene || "未指定场景").trim();
-    if (!sequenceId || scene !== lastScene) {
+    const descriptor = shotSequenceDescriptor(shot, sequenceIndex + 1, false);
+    if (!sequenceId || descriptor.key !== lastSequenceKey) {
       sequenceIndex += 1;
       sequenceId = id("sequence");
-      insertSequence.run(sequenceId, projectId, scene === "未指定场景" ? `场次 ${sequenceIndex + 1}` : scene, scene, sequenceIndex);
-      lastScene = scene;
+      insertSequence.run(sequenceId, projectId, descriptor.name, descriptor.scene, sequenceIndex);
+      lastSequenceKey = descriptor.key;
     }
     insertShot.run(
       id("shot"), sequenceId, shot.no || index + 1,
@@ -1912,7 +2182,7 @@ async function downloadVideo(remoteUrl, projectId, takeId) {
   return `/outputs/${encodeURIComponent(safeName(projectId))}/takes/${encodeURIComponent(safeName(takeId))}.mp4`;
 }
 
-function getRoughCut(projectId) {
+function getRoughCut(projectId, episodeNumber = 0) {
   const project = db.prepare("SELECT id FROM projects WHERE id = ? AND deleted_at = ''").get(projectId);
   if (!project) throw Object.assign(new Error("项目不存在或已删除"), { statusCode: 404 });
   const rows = db.prepare(`SELECT shots.id, shots.shot_no, shots.title, shots.duration_sec, shots.edit_duration_sec,
@@ -1922,7 +2192,9 @@ function getRoughCut(projectId) {
     WHERE sequences.project_id = ? ORDER BY sequences.sort_order, shots.sort_order`).all(projectId);
   const preferred = db.prepare("SELECT * FROM takes WHERE id = ? AND status = 'succeeded'");
   const fallback = db.prepare("SELECT * FROM takes WHERE shot_id = ? AND status = 'succeeded' AND rejected = 0 ORDER BY approved DESC, take_no DESC LIMIT 1");
+  const normalizedEpisode = Math.max(0, Math.trunc(Number(episodeNumber) || 0));
   return rows.map((shot) => {
+    const generationMeta = safeJson(shot.generation_meta_json || "{}", {});
     const take = shot.preferred_take_id ? preferred.get(shot.preferred_take_id) : null;
     const resolved = take || fallback.get(shot.id) || null;
     return {
@@ -1931,11 +2203,13 @@ function getRoughCut(projectId) {
       title: shot.title,
       duration: Number(shot.edit_duration_sec || shot.duration_sec),
       generationDuration: shot.duration_sec,
-      postOnly: Boolean(safeJson(shot.generation_meta_json || "{}", {}).postOnly),
+      postOnly: Boolean(generationMeta.postOnly),
+      episodeNumber: Number(generationMeta.episodeNumber || 0),
+      sourceShotId: String(generationMeta.sourceShotId || ""),
       sequence: shot.sequence_name,
       take: resolved ? mapTake(resolved) : null
     };
-  });
+  }).filter((item) => !normalizedEpisode || item.episodeNumber === normalizedEpisode);
 }
 
 function wrapCardLine(value, limit = 16) {
@@ -1946,13 +2220,32 @@ function wrapCardLine(value, limit = 16) {
   return lines;
 }
 
-async function renderPostProductionShot(shotId) {
+function normalizeTitleCardStyle(value, fallback = {}) {
+  const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const previous = fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+  const color = (candidate, defaultValue) => /^#[0-9a-f]{6}$/i.test(String(candidate || "")) ? String(candidate).toLowerCase() : defaultValue;
+  return {
+    backgroundColor: color(input.backgroundColor ?? previous.backgroundColor, "#090b0e"),
+    titleColor: color(input.titleColor ?? previous.titleColor, "#db3029"),
+    bodyColor: color(input.bodyColor ?? previous.bodyColor, "#f5f5f5"),
+    captionColor: color(input.captionColor ?? previous.captionColor, "#a6a6a6"),
+    alignment: ["center", "left"].includes(input.alignment ?? previous.alignment) ? (input.alignment ?? previous.alignment) : "center",
+    titleScale: ["compact", "standard", "large"].includes(input.titleScale ?? previous.titleScale) ? (input.titleScale ?? previous.titleScale) : "standard"
+  };
+}
+
+function ffmpegColor(value) {
+  return `0x${String(value || "#000000").replace(/^#/, "")}`;
+}
+
+async function renderPostProductionShot(shotId, payload = {}) {
   const shot = db.prepare(`SELECT shots.*, projects.id AS project_id, projects.aspect_ratio
     FROM shots JOIN sequences ON sequences.id = shots.sequence_id
     JOIN projects ON projects.id = sequences.project_id
     WHERE shots.id = ? AND projects.deleted_at = ''`).get(shotId);
   if (!shot) throw Object.assign(new Error("镜头不存在"), { statusCode: 404 });
-  if (!safeJson(shot.generation_meta_json || "{}", {}).postOnly) {
+  const generationMeta = safeJson(shot.generation_meta_json || "{}", {});
+  if (!generationMeta.postOnly) {
     throw Object.assign(new Error("只有后期镜头可以在本地生成字幕卡。"), { statusCode: 409 });
   }
   if (spawnSync(ffmpegPath, ["-version"], { stdio: "ignore" }).status !== 0) {
@@ -1962,6 +2255,7 @@ async function renderPostProductionShot(shotId) {
   const ratio = String(shot.aspect_ratio || "9:16");
   const size = ratio === "16:9" ? "1280x720" : ratio === "1:1" ? "1080x1080" : "720x1280";
   const duration = clamp(shot.edit_duration_sec || 3, 1, 60);
+  const titleCardStyle = normalizeTitleCardStyle(payload.style, generationMeta.titleCard);
   const quoted = [...String(shot.prompt || "").matchAll(/[“\"]([^”\"]{2,120})[”\"]/g)].map((match) => match[1]);
   const cardLines = (quoted.length ? quoted.slice(0, 3) : [shot.title, String(shot.prompt || "").slice(0, 140)])
     .map((line) => String(line || "").trim()).filter(Boolean);
@@ -1971,21 +2265,36 @@ async function renderPostProductionShot(shotId) {
   const outputName = `${safeName(takeId)}-post.mp4`;
   const outputPath = path.join(folder, outputName);
   const textPath = path.join(folder, `${safeName(takeId)}-post.txt`);
+  const stylePath = path.join(folder, `${safeName(takeId)}-post-style.json`);
   await fsp.writeFile(textPath, cardLines.join("\n"), "utf8");
+  await fsp.writeFile(stylePath, JSON.stringify(titleCardStyle), "utf8");
   const fadeOut = Math.max(0, duration - 0.35);
   const [targetWidth, targetHeight] = size.split("x");
   const filters = spawnSync(ffmpegPath, ["-hide_banner", "-filters"], { encoding: "utf8" });
   const supportsDrawtext = /\sdrawtext\s/.test(String(filters.stdout || ""));
-  let videoInput = ["-f", "lavfi", "-i", `color=c=0x090b0e:s=${size}:r=30:d=${duration}`];
+  let videoInput = ["-f", "lavfi", "-i", `color=c=${ffmpegColor(titleCardStyle.backgroundColor)}:s=${size}:r=30:d=${duration}`];
   let visualFilter = `scale=${targetWidth}:${targetHeight},fade=t=in:st=0:d=0.25,fade=t=out:st=${fadeOut}:d=0.35`;
   if (supportsDrawtext) {
     const fontCandidates = ["/System/Library/Fonts/PingFang.ttc", "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"];
     const font = fontCandidates.find((item) => fs.existsSync(item));
     const fontOption = font ? `fontfile='${font}'` : "font='Sans'";
-    visualFilter = `drawtext=${fontOption}:textfile='${textPath}':fontcolor=white:fontsize=${ratio === "16:9" ? 40 : 42}:line_spacing=20:x=(w-text_w)/2:y=(h-text_h)/2:borderw=1:bordercolor=black@0.65,${visualFilter}`;
+    const scale = titleCardStyle.titleScale === "compact" ? 0.82 : titleCardStyle.titleScale === "large" ? 1.18 : 1;
+    const baseSize = ratio === "16:9" ? 40 : 42;
+    const x = titleCardStyle.alignment === "left" ? "w*0.11" : "(w-text_w)/2";
+    const lineFiles = [];
+    for (let lineIndex = 0; lineIndex < Math.min(cardLines.length, 3); lineIndex += 1) {
+      const linePath = path.join(folder, `${safeName(takeId)}-post-line-${lineIndex + 1}.txt`);
+      await fsp.writeFile(linePath, cardLines[lineIndex], "utf8");
+      lineFiles.push(linePath);
+    }
+    const colors = [titleCardStyle.titleColor, titleCardStyle.bodyColor, titleCardStyle.captionColor];
+    const sizes = [Math.round(baseSize * 1.55 * scale), Math.round(baseSize * scale), Math.round(baseSize * 0.76 * scale)];
+    const positions = ["h*0.37", "h*0.50", "h*0.61"];
+    const drawFilters = lineFiles.map((linePath, lineIndex) => `drawtext=${fontOption}:textfile='${linePath}':fontcolor=${ffmpegColor(colors[lineIndex])}:fontsize=${sizes[lineIndex]}:x=${x}:y=${positions[lineIndex]}:borderw=1:bordercolor=black@0.55`);
+    visualFilter = `${drawFilters.join(",")},${visualFilter}`;
   } else if (process.platform === "darwin" && fs.existsSync("/usr/bin/swift")) {
     const cardPath = path.join(folder, `${safeName(takeId)}-post.png`);
-    await runProcess("/usr/bin/swift", [path.join(rootDir, "scripts", "render-title-card.swift"), cardPath, targetWidth, targetHeight, textPath], 2 * 60 * 1000);
+    await runProcess("/usr/bin/swift", [path.join(rootDir, "scripts", "render-title-card.swift"), cardPath, targetWidth, targetHeight, textPath, stylePath], 2 * 60 * 1000);
     videoInput = ["-loop", "1", "-framerate", "30", "-i", cardPath];
   } else {
     throw Object.assign(new Error("当前 FFmpeg 不支持 drawtext，且没有可用的系统文字渲染器。"), { statusCode: 503 });
@@ -2007,20 +2316,22 @@ async function renderPostProductionShot(shotId) {
       VALUES (?, ?, ?, 'succeeded', ?, ?, 1, 0, '本地后期字幕卡', ?, ?)`).run(
         takeId, shotId, takeNo, localUrl, shot.prompt || shot.title, timestamp, timestamp
       );
-    db.prepare("UPDATE shots SET preferred_take_id = ?, updated_at = ? WHERE id = ?").run(takeId, timestamp, shotId);
+    db.prepare("UPDATE shots SET preferred_take_id = ?, generation_meta_json = ?, updated_at = ? WHERE id = ?")
+      .run(takeId, JSON.stringify({ ...generationMeta, titleCard: titleCardStyle }), timestamp, shotId);
     db.prepare("UPDATE projects SET updated_at = ? WHERE id = ?").run(timestamp, shot.project_id);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return { ok: true, takeId, videoUrl: localUrl, duration };
+  return { ok: true, takeId, videoUrl: localUrl, duration, style: titleCardStyle };
 }
 
-async function assembleProject(projectId) {
+async function assembleProject(projectId, episodeNumber = 0) {
   const project = db.prepare("SELECT * FROM projects WHERE id = ? AND deleted_at = ''").get(projectId);
   if (!project) throw Object.assign(new Error("项目不存在"), { statusCode: 404 });
-  const items = getRoughCut(projectId);
+  const normalizedEpisode = Math.max(0, Math.trunc(Number(episodeNumber) || 0));
+  const items = getRoughCut(projectId, normalizedEpisode);
   const pendingPost = items.filter((item) => item.postOnly && !item.take?.localUrl);
   if (pendingPost.length) throw Object.assign(new Error(`还有 ${pendingPost.length} 个后期镜头尚未制作（如字幕卡），请完成后再合片。`), { statusCode: 409 });
   const missing = items.filter((item) => !item.postOnly && !item.take?.localUrl);
@@ -2028,7 +2339,7 @@ async function assembleProject(projectId) {
   if (items.length < 2) throw Object.assign(new Error("至少需要 2 个镜头才能合片。"), { statusCode: 409 });
   const folder = path.join(outputsDir, safeName(projectId), "cuts");
   await fsp.mkdir(folder, { recursive: true });
-  const outputName = `cut-${Date.now()}.mp4`;
+  const outputName = `cut-${normalizedEpisode ? `episode-${normalizedEpisode}-` : ""}${Date.now()}.mp4`;
   const outputPath = path.join(folder, outputName);
   const args = ["-y"];
   const inputs = items.map((item) => outputUrlToPath(item.take.localUrl));
@@ -2095,20 +2406,76 @@ function normalizeSourceFilePath(value) {
   return path.normalize(input);
 }
 
-const allowedSourceExtensions = new Set([".md", ".markdown", ".mdown", ".txt"]);
+const allowedSourceExtensions = new Set([".md", ".markdown", ".mdown", ".txt", ".docx"]);
+
+function decodeXmlText(value) {
+  return String(value || "")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'").replace(/&amp;/g, "&")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)));
+}
+
+function docxXmlText(fragment) {
+  const prepared = String(fragment || "").replace(/<w:tab\b[^>]*\/>/g, "\t").replace(/<w:br\b[^>]*\/>/g, "\n");
+  return [...prepared.matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)].map((match) => decodeXmlText(match[1])).join("").trim();
+}
+
+function docxParagraphMarkdown(fragment) {
+  const text = docxXmlText(fragment);
+  if (!text) return "";
+  const numbered = /<w:numPr\b/.test(fragment);
+  const heading = /^(?:第[一二三四五六七八九十\d]+部分|第\s*\d+\s*集《)/.test(text) ? "# "
+    : /^\d+\.\d+(?:\.\d+)?\s+/.test(text) ? "## "
+      : /^(?:镜头|转场镜头)\s*[A-Za-z0-9]+\s*｜/.test(text) || /^(?:[A-Z]{2,10}|LOC|PROP)-\d{2}\s+/.test(text) ? "### " : "";
+  return `${heading || (numbered ? "- " : "")}${text}`;
+}
+
+function docxTableMarkdown(fragment) {
+  const rows = [...String(fragment || "").matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)].map((rowMatch) =>
+    [...rowMatch[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map((cellMatch) => {
+      const paragraphs = [...cellMatch[0].matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map((paragraph) => docxXmlText(paragraph[0])).filter(Boolean);
+      return paragraphs.join("\n").trim();
+    })
+  ).filter((row) => row.some(Boolean));
+  if (!rows.length) return "";
+  if (rows.length === 1 && rows[0].length === 1) return `\`\`\`text\n${rows[0][0]}\n\`\`\``;
+  const width = Math.max(...rows.map((row) => row.length));
+  const escaped = rows.map((row) => Array.from({ length: width }, (_, index) => String(row[index] || "").replace(/\|/g, "\\|").replace(/\n+/g, "<br>")));
+  return [
+    `| ${escaped[0].join(" | ")} |`,
+    `| ${Array.from({ length: width }, () => "---").join(" | ")} |`,
+    ...escaped.slice(1).map((row) => `| ${row.join(" | ")} |`)
+  ].join("\n");
+}
+
+function extractDocxSource(filePath) {
+  const result = spawnSync("unzip", ["-p", filePath, "word/document.xml"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  if (result.status !== 0 || !result.stdout) {
+    throw Object.assign(new Error("DOCX 无法读取；请确认文件未损坏且不是旧版 .doc 格式"), { statusCode: 422 });
+  }
+  const body = result.stdout.match(/<w:body\b[^>]*>([\s\S]*?)<\/w:body>/)?.[1] || result.stdout;
+  const blocks = [...body.matchAll(/<w:p\b[\s\S]*?<\/w:p>|<w:tbl\b[\s\S]*?<\/w:tbl>/g)].map((match) =>
+    match[0].startsWith("<w:tbl") ? docxTableMarkdown(match[0]) : docxParagraphMarkdown(match[0])
+  ).filter(Boolean);
+  if (!blocks.length) throw Object.assign(new Error("DOCX 中没有识别到可用文字或表格"), { statusCode: 422 });
+  const paragraphCount = blocks.filter((block) => !block.startsWith("|") && !block.startsWith("```text")).length;
+  const tableCount = blocks.length - paragraphCount;
+  return `<!-- NOVELCUT_DOCX paragraphs=${paragraphCount} tables=${tableCount} -->\n${blocks.join("\n\n")}`;
+}
 
 async function readSourceTextFile(resolved, rootPath = path.dirname(resolved)) {
   const extension = path.extname(resolved).toLowerCase();
   if (!allowedSourceExtensions.has(extension)) {
-    throw Object.assign(new Error("只支持 .md、.markdown、.mdown 和 .txt 文件"), { statusCode: 415 });
+    throw Object.assign(new Error("只支持 .docx、.md、.markdown、.mdown 和 .txt 文件"), { statusCode: 415 });
   }
   const stat = await fsp.stat(resolved);
   if (!stat.isFile()) throw Object.assign(new Error("路径不是文件"), { statusCode: 400 });
   if (stat.size > 6 * 1024 * 1024) throw Object.assign(new Error("文件超过 6MB，请拆分后再导入"), { statusCode: 413 });
-  const text = (await fsp.readFile(resolved, "utf8")).replace(/^\uFEFF/, "");
+  const text = extension === ".docx" ? extractDocxSource(resolved) : (await fsp.readFile(resolved, "utf8")).replace(/^\uFEFF/, "");
   if (!text.trim()) throw Object.assign(new Error("文件内容为空"), { statusCode: 422 });
-  if (text.includes("\0")) throw Object.assign(new Error("文件不是可识别的文本格式"), { statusCode: 415 });
-  return { name: path.basename(resolved), path: resolved, relativePath: path.relative(rootPath, resolved) || path.basename(resolved), size: stat.size, text };
+  if (extension !== ".docx" && text.includes("\0")) throw Object.assign(new Error("文件不是可识别的文本格式"), { statusCode: 415 });
+  return { name: path.basename(resolved), path: resolved, relativePath: path.relative(rootPath, resolved) || path.basename(resolved), size: stat.size, text, format: extension.slice(1) };
 }
 
 async function collectSourceFiles(directory, depth = 0, results = []) {
@@ -2131,7 +2498,7 @@ async function readSourcePath(sourcePath) {
   catch { throw Object.assign(new Error("找不到这个文件或文件夹，请检查路径是否完整"), { statusCode: 404 }); }
   const stat = await fsp.stat(resolved);
   const paths = stat.isDirectory() ? await collectSourceFiles(resolved) : [resolved];
-  if (!paths.length) throw Object.assign(new Error("这个文件夹里没有可识别的 Markdown/TXT 文件"), { statusCode: 422 });
+  if (!paths.length) throw Object.assign(new Error("这个文件夹里没有可识别的 DOCX/Markdown/TXT 文件"), { statusCode: 422 });
   const files = [];
   let totalSize = 0;
   for (const filePath of paths) {
@@ -2148,6 +2515,27 @@ async function readSourcePath(sourcePath) {
     text,
     files
   };
+}
+
+async function readUploadedSource(payload) {
+  const name = path.basename(String(payload?.name || "上传文件.docx"));
+  const extension = path.extname(name).toLowerCase();
+  if (!allowedSourceExtensions.has(extension)) throw Object.assign(new Error("不支持这个文件格式"), { statusCode: 415 });
+  const encoded = String(payload?.dataBase64 || "");
+  if (!encoded) throw Object.assign(new Error("上传文件内容为空"), { statusCode: 422 });
+  const buffer = Buffer.from(encoded, "base64");
+  if (!buffer.length || buffer.length > 6 * 1024 * 1024) throw Object.assign(new Error("文件为空或超过 6MB"), { statusCode: 413 });
+  const temporaryDirectory = await fsp.mkdtemp(path.join(os.tmpdir(), "novelcut-source-"));
+  const temporaryPath = path.join(temporaryDirectory, name);
+  try {
+    await fsp.writeFile(temporaryPath, buffer);
+    const file = await readSourceTextFile(temporaryPath, temporaryDirectory);
+    delete file.path;
+    file.relativePath = name;
+    return { name, size: buffer.length, text: file.text, files: [file] };
+  } finally {
+    await fsp.rm(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 async function readJson(req) {
@@ -2177,6 +2565,11 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/source-files/read") {
     const payload = await readJson(req);
     return sendJson(res, 200, await readSourcePath(payload.path));
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/source-files/upload") {
+    const payload = await readJson(req);
+    return sendJson(res, 200, await readUploadedSource(payload));
   }
 
   if (req.method === "POST" && url.pathname === "/api/source/preview") {
@@ -2370,7 +2763,8 @@ async function handleApi(req, res, url) {
 
   match = url.pathname.match(/^\/api\/shots\/([^/]+)\/render-post$/);
   if (req.method === "POST" && match) {
-    return sendJson(res, 201, await renderPostProductionShot(decodeURIComponent(match[1])));
+    const payload = await readJson(req);
+    return sendJson(res, 201, await renderPostProductionShot(decodeURIComponent(match[1]), payload));
   }
 
   match = url.pathname.match(/^\/api\/takes\/([^/]+)\/(approve|prefer|reject)$/);
@@ -2394,10 +2788,13 @@ async function handleApi(req, res, url) {
   }
 
   match = url.pathname.match(/^\/api\/projects\/([^/]+)\/rough-cut$/);
-  if (req.method === "GET" && match) return sendJson(res, 200, { items: getRoughCut(decodeURIComponent(match[1])) });
+  if (req.method === "GET" && match) return sendJson(res, 200, { items: getRoughCut(decodeURIComponent(match[1]), url.searchParams.get("episode")) });
 
   match = url.pathname.match(/^\/api\/projects\/([^/]+)\/assemble$/);
-  if (req.method === "POST" && match) return sendJson(res, 200, await assembleProject(decodeURIComponent(match[1])));
+  if (req.method === "POST" && match) {
+    const payload = await readJson(req);
+    return sendJson(res, 200, await assembleProject(decodeURIComponent(match[1]), payload.episode));
+  }
 
   if (req.method === "GET" && url.pathname === "/api/jobs") {
     const projectId = url.searchParams.get("projectId");

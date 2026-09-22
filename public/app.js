@@ -14,6 +14,10 @@ const state = {
   roughItems: [],
   roughIndex: 0,
   assembledUrl: "",
+  activeEpisode: 0,
+  roughEpisode: 0,
+  transitionEpisode: 0,
+  transitionFilter: "all",
   assetBatch: { running: false, total: 0, done: 0, failed: 0, current: "" },
   assetSections: {
     character_identity: false,
@@ -34,6 +38,8 @@ const roughCutDialog = document.querySelector("#roughCutDialog");
 const roughCutContent = document.querySelector("#roughCutContent");
 const promptDialog = document.querySelector("#promptDialog");
 const promptDialogContent = document.querySelector("#promptDialogContent");
+const transitionDialog = document.querySelector("#transitionDialog");
+const transitionDialogContent = document.querySelector("#transitionDialogContent");
 const sourceImportZone = document.querySelector("#sourceImportZone");
 const sourceFileInput = document.querySelector("#sourceFileInput");
 const sourceFolderInput = document.querySelector("#sourceFolderInput");
@@ -143,7 +149,17 @@ function toast(message, type = "", action = null) {
 }
 
 function sourceFileAllowed(name = "") {
-  return /\.(?:md|markdown|mdown|txt)$/i.test(String(name));
+  return /\.(?:docx|md|markdown|mdown|txt)$/i.test(String(name));
+}
+
+function bufferToBase64(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function currentSourceMode() {
@@ -201,7 +217,7 @@ function applyImportedSources(items, label) {
   }
   sourceTextDirty = false;
   if (createMode === "project" && !createForm.elements.name.value.trim()) {
-    createForm.elements.name.value = (cleanItems[0].name || "新短剧").replace(/\.(?:md|markdown|mdown|txt)$/i, "");
+    createForm.elements.name.value = (cleanItems[0].name || "新短剧").replace(/\.(?:docx|md|markdown|mdown|txt)$/i, "");
   }
   lastSourceDescription = `${label}（${cleanItems.length} 个文件）`;
   setSourceStatus(`${lastSourceDescription} · 正在解析…`, "ready");
@@ -214,16 +230,19 @@ async function loadSourceFiles(fileList) {
   if (!files.length) return;
   const unsupported = files.filter((file) => !sourceFileAllowed(file.name));
   const valid = files.filter((file) => sourceFileAllowed(file.name));
-  if (!valid.length) throw new Error("没有找到 .md、.markdown、.mdown 或 .txt 文件");
+  if (!valid.length) throw new Error("没有找到 .docx、.md、.markdown、.mdown 或 .txt 文件");
   if (valid.length > 80) throw new Error("一次最多导入 80 个文本文件");
   if (valid.reduce((sum, file) => sum + file.size, 0) > maxSourceFileBytes) throw new Error("导入文件总计超过 6MB，请减少文件后再试");
-  const items = await Promise.all(valid.map(async (file) => ({
-    name: file.name,
-    relativePath: file.webkitRelativePath || file.name,
-    size: file.size,
-    text: await file.text(),
-    kind: "upload"
-  })));
+  const items = await Promise.all(valid.map(async (file) => {
+    if (/\.docx$/i.test(file.name)) {
+      const data = await api("/api/source-files/upload", {
+        method: "POST",
+        body: JSON.stringify({ name: file.name, dataBase64: bufferToBase64(await file.arrayBuffer()) })
+      });
+      return { ...data.files[0], name: file.name, relativePath: file.webkitRelativePath || file.name, size: file.size, kind: "upload" };
+    }
+    return { name: file.name, relativePath: file.webkitRelativePath || file.name, size: file.size, text: await file.text(), kind: "upload" };
+  }));
   applyImportedSources(items, fileList.length > 1 ? "批量文件" : valid[0].name);
   if (unsupported.length) toast(`已跳过 ${unsupported.length} 个不支持的文件`, "error");
 }
@@ -257,18 +276,27 @@ async function refreshSourcePreview() {
   try {
     const preview = await api("/api/source/preview", { method: "POST", body: JSON.stringify({ sourceText: text }) });
     const warnings = preview.warnings.length
-      ? `<div class="preview-warnings"><strong>${preview.warnings.length} 项需要确认</strong>${preview.warnings.map((warning) => `<span>${escapeHtml(warning)}</span>`).join("")}</div>`
+      ? `<div class="preview-warnings"><strong>${preview.warnings.length} 项需要确认</strong>${preview.warnings.slice(0, 12).map((warning) => `<span>${escapeHtml(warning)}</span>`).join("")}${preview.warnings.length > 12 ? `<span>另有 ${preview.warnings.length - 12} 项逐镜提示，创建后可在工作台继续处理。</span>` : ""}</div>`
       : '<div class="preview-ok">未发现明显格式问题</div>';
     const assetGroups = [["character", "人物"], ["scene", "场景"], ["prop", "道具"]].map(([type, label]) => {
       const names = (preview.assets || []).filter((asset) => asset.type === type && asset.role !== "view").map((asset) => asset.name);
       return names.length ? `<span><b>${label}</b>${names.map(escapeHtml).join("、")}</span>` : "";
     }).join("");
     const production = preview.production || {};
-    const productionSummary = production.mode === "composite"
+    const productionSummary = ["composite", "series_bible"].includes(production.mode)
       ? `<div class="preview-production"><strong>制作清单</strong><span>${production.voices?.length || 0} 配音角色</span><span>${production.bgm?.length || 0} 段 BGM</span><span>${production.sfx?.length || 0} 条音效</span><span>${production.grading?.length || 0} 组调色</span><span>${production.effects?.length || 0} 项特效</span></div>`
+      : "";
+    const seriesPlan = production.mode === "series_bible"
+      ? `<div class="preview-series"><div><strong>${escapeHtml(production.series?.title || "系列完稿")}</strong><span>${production.episodes?.length || 0} 集可执行内容 · ${production.transitions?.length || 0} 个转场关系</span></div><div class="preview-episodes">${(production.episodes || []).map((episode) => `<span><b>第${episode.number}集</b>${escapeHtml(episode.title)}<i>${episode.shotCount} 镜 · ${episode.editDuration}s · ${episode.transitionCount} 转场</i></span>`).join("")}</div></div>`
+      : "";
+    const healthIssues = preview.importHealth?.issues || [];
+    const health = production.mode === "series_bible"
+      ? `<div class="preview-health ${preview.requiresConfirmation ? "blocking" : "ready"}"><div><strong>完稿体检</strong><span>${preview.requiresConfirmation ? `${preview.importHealth.blockingIssues.length} 类严重问题，创建前需要确认` : "结构检查通过"}</span></div>${healthIssues.map((issue) => `<p class="${escapeHtml(issue.level)}"><b>${issue.level === "error" ? "阻断" : "提醒"}</b>${escapeHtml(issue.message)}</p>`).join("")}${preview.requiresConfirmation ? '<label class="risk-confirm"><input type="checkbox" name="confirmSourceRisks" />我已查看问题，同意使用系统修复后的提示词和转场分类创建项目</label>' : ""}</div>`
       : "";
     sourcePreview.innerHTML = `<div class="preview-head"><strong>解析预览</strong><span>${preview.shotCount} 镜头 · ${preview.characterCount} 人物 · ${preview.sceneCount} 场景 · ${preview.propCount || 0} 道具</span></div>
       <div class="preview-kb"><span>知识库体检 ${escapeHtml(preview.knowledge.version)}</span><b>平均 ${preview.knowledge.averageScore} 分</b><small>${preview.knowledge.reviewCount} 镜需确认${preview.knowledge.blockedCount ? ` · ${preview.knowledge.blockedCount} 镜缺关键内容` : ""}</small></div>
+      ${seriesPlan}
+      ${health}
       ${assetGroups ? `<div class="preview-assets">${assetGroups}</div>` : ""}
       ${preview.characterViewCount || preview.sceneViewCount ? `<div class="preview-views">另生成 ${preview.characterViewCount || 0} 个人物逐镜视觉和 ${preview.sceneViewCount || 0} 个场景逐镜视觉，不计入人物/场景基准。</div>` : ""}
       ${productionSummary}
@@ -323,6 +351,35 @@ function flattenShots(project = state.project) {
   return (project?.sequences || []).flatMap((sequence) => sequence.shots.map((shot) => ({ ...shot, sequenceName: sequence.name })));
 }
 
+function seriesEpisodes(project = state.project) {
+  return project?.production?.mode === "series_bible" ? (project.production.episodes || []) : [];
+}
+
+function shotEpisodeNumber(shot) {
+  return Number(shot?.generationMeta?.episodeNumber || 0);
+}
+
+function workspaceShots(project = state.project) {
+  const shots = flattenShots(project);
+  return state.activeEpisode ? shots.filter((shot) => shotEpisodeNumber(shot) === state.activeEpisode) : shots;
+}
+
+function episodeLabel(project = state.project, episodeNumber = state.activeEpisode) {
+  if (!episodeNumber) return "全季";
+  const episode = seriesEpisodes(project).find((item) => Number(item.number) === Number(episodeNumber));
+  return episode?.title && episode.title !== `第${episodeNumber}集` ? `第${episodeNumber}集 · ${episode.title}` : `第${episodeNumber}集`;
+}
+
+function renderEpisodeNavigator(project, activeEpisode = state.activeEpisode, attribute = "data-episode-number", includeAll = true) {
+  const episodes = seriesEpisodes(project);
+  if (!episodes.length) return "";
+  const allCount = flattenShots(project).length;
+  return `<div class="episode-nav" aria-label="剧集导航">
+    ${includeAll ? `<button class="${activeEpisode === 0 ? "active" : ""}" ${attribute}="0"><span>全部</span><small>${allCount}</small></button>` : ""}
+    ${episodes.map((episode) => `<button class="${Number(activeEpisode) === Number(episode.number) ? "active" : ""}" ${attribute}="${Number(episode.number)}" title="${escapeHtml(episode.title || `第${episode.number}集`)}"><span>第${Number(episode.number)}集</span><small>${Number(episode.shotCount || 0)}</small></button>`).join("")}
+  </div>`;
+}
+
 function selectedShot() {
   return flattenShots().find((shot) => shot.id === state.selectedShotId) || flattenShots()[0] || null;
 }
@@ -350,10 +407,15 @@ function clearActiveProject(projectId = "") {
   state.roughItems = [];
   state.roughIndex = 0;
   state.assembledUrl = "";
+  state.activeEpisode = 0;
+  state.roughEpisode = 0;
+  state.transitionEpisode = 0;
+  state.transitionFilter = "all";
   state.view = "home";
   if (!clearedId || localStorage.getItem("novelcut:lastProject") === clearedId) localStorage.removeItem("novelcut:lastProject");
   localStorage.removeItem("novelcut:lastShot");
   if (roughCutDialog.open) roughCutDialog.close();
+  if (transitionDialog.open) transitionDialog.close();
 }
 
 async function loadProjects() {
@@ -404,10 +466,15 @@ async function deletePendingProject() {
 }
 
 async function openProject(projectId, preserveSelection = false, destination = "auto") {
+  const previousProjectId = state.project?.id || "";
   const previous = preserveSelection ? state.selectedShotId : "";
   state.project = await api(`/api/projects/${encodeURIComponent(projectId)}`);
   state.view = destination === "auto" ? (projectAssetReadiness(state.project).complete ? "workspace" : "assets") : destination;
-  const shots = flattenShots();
+  const episodes = seriesEpisodes();
+  if (previousProjectId !== projectId || !preserveSelection) state.activeEpisode = episodes[0] ? Number(episodes[0].number) : 0;
+  if (state.activeEpisode && !episodes.some((episode) => Number(episode.number) === state.activeEpisode)) state.activeEpisode = episodes[0] ? Number(episodes[0].number) : 0;
+  if (previousProjectId !== projectId || !preserveSelection) state.roughEpisode = state.activeEpisode;
+  const shots = workspaceShots();
   state.selectedShotId = shots.some((shot) => shot.id === previous) ? previous : shots[0]?.id || "";
   const shot = selectedShot();
   if (!shot?.takes.some((take) => take.id === state.selectedTakeId)) state.selectedTakeId = shot?.preferredTakeId || shot?.takes[0]?.id || "";
@@ -425,7 +492,9 @@ async function init() {
     if (lastProject && state.projects.some((project) => project.id === lastProject)) {
       await openProject(lastProject);
       const lastShot = localStorage.getItem("novelcut:lastShot");
-      if (lastShot && flattenShots().some((shot) => shot.id === lastShot)) {
+      const restoredShot = flattenShots().find((shot) => shot.id === lastShot);
+      if (restoredShot) {
+        if (shotEpisodeNumber(restoredShot)) state.activeEpisode = shotEpisodeNumber(restoredShot);
         state.selectedShotId = lastShot;
         render();
       }
@@ -566,18 +635,20 @@ function renderWorkspace() {
   const project = state.project;
   const shot = selectedShot();
   const take = selectedTake(shot);
-  const shots = flattenShots();
-  const activeJobs = shots.flatMap((item) => item.takes).filter((item) => ["queued", "submitting", "submitted", "processing"].includes(item.status)).length;
+  const shots = workspaceShots();
+  const activeJobs = flattenShots().flatMap((item) => item.takes).filter((item) => ["queued", "submitting", "submitted", "processing"].includes(item.status)).length;
+  const transitions = project.production?.transitions || [];
   app.innerHTML = `<div class="app-shell">
     ${rail("workspace")}
     <main class="workspace">
       <header class="topbar">
         <div class="project-switcher">
-          <div class="project-title"><strong>${escapeHtml(project.name)}</strong><span>${shots.length} 个镜头 · ${countReady(shots)} 个可用</span></div>
+          <div class="project-title"><strong>${escapeHtml(project.name)}</strong><span>${escapeHtml(episodeLabel())} · ${shots.length} 个镜头 · ${countReady(shots)} 个可用</span></div>
         </div>
         <div class="spacer"></div>
         <span class="autosave"><i></i>${state.saving ? "保存中…" : "已保存"}</span>
         ${activeJobs ? `<button class="task-pill" data-action="show-tasks"><span class="spinner"></span><b>${activeJobs}</b> 进行中</button>` : ""}
+        ${transitions.length ? `<button class="button ghost compact transition-queue-button" data-action="transitions">转场清单 <b>${transitions.length}</b></button>` : ""}
         <button class="button primary compact" data-action="next-action">${nextActionLabel(shots)}</button>
       </header>
       <section class="studio">
@@ -593,7 +664,8 @@ function renderWorkspace() {
 function renderShotPanel(project, activeShot) {
   const search = state.search.trim().toLowerCase();
   const groups = project.sequences.map((sequence) => {
-    const shots = sequence.shots.filter((shot) => !search || `${shot.no}${shot.title}${shot.prompt}${shot.scene}${shot.characters}`.toLowerCase().includes(search));
+    const shots = sequence.shots.filter((shot) => (!state.activeEpisode || shotEpisodeNumber(shot) === state.activeEpisode)
+      && (!search || `${shot.no}${shot.title}${shot.prompt}${shot.scene}${shot.characters}`.toLowerCase().includes(search)));
     if (!shots.length) return "";
     return `<section class="sequence">
       <div class="sequence-head"><span>S${String(sequence.sortOrder + 1).padStart(2, "0")}</span><span>${escapeHtml(sequence.name)}</span></div>
@@ -605,8 +677,8 @@ function renderShotPanel(project, activeShot) {
     </section>`;
   }).join("");
   return `<aside class="shot-panel">
-    <div class="panel-head"><h2>分镜</h2><span class="count">${flattenShots(project).length}</span><span class="spacer"></span><button class="icon-button" data-action="append-shots" title="向当前项目追加分镜">+</button></div>
-    <label class="search">${icon("search")}<input id="shotSearch" value="${escapeHtml(state.search)}" placeholder="搜索镜头" /></label>
+    <div class="panel-head"><h2>分镜</h2><span class="count">${workspaceShots(project).length}</span><span class="spacer"></span><button class="icon-button" data-action="append-shots" title="向当前项目追加分镜">+</button></div>
+    <div class="shot-filters">${renderEpisodeNavigator(project)}<label class="search">${icon("search")}<input id="shotSearch" value="${escapeHtml(state.search)}" placeholder="搜索当前范围" /></label></div>
     <div class="shot-tree">${groups || '<div class="hint" style="padding:20px">没有匹配的镜头</div>'}</div>
   </aside>`;
 }
@@ -647,6 +719,19 @@ function productionTargetIncludes(value, shotNo) {
 
 function renderShotProduction(project, shot) {
   const production = project.production || {};
+  if (production.mode === "series_bible") {
+    const sourceShotId = String(shot.generationMeta?.sourceShotId || "");
+    const episodeNumber = shotEpisodeNumber(shot);
+    const transitions = (production.transitions || []).filter((item) => Number(item.episodeNumber) === episodeNumber
+      && [item.fromShot, item.toShot].some((value) => String(value || "") === sourceShotId));
+    if (!transitions.length) return "";
+    const executionLabels = { generate: "生成空镜", edit: "剪辑衔接", audio: "声音桥", local_effect: "本地特效" };
+    return `<details class="inspector-section compact-details production-plan" open>
+      <summary><span>相邻转场</span><small>${transitions.length} 项</small></summary>
+      <div class="production-rows">${transitions.map((item) => `<span><b>${escapeHtml(String(item.fromShot || "") === sourceShotId ? "镜后" : "镜前")}</b>${escapeHtml(item.title || item.method || item.type || "转场")}<small>${escapeHtml(executionLabels[item.execution] || item.execution || "剪辑衔接")} · ${escapeHtml(item.fromShot || "片头")} → ${escapeHtml(item.toShot || "片尾")}</small></span>`).join("")}</div>
+      <button class="button ghost compact production-open-transitions" data-action="transitions">打开本集转场清单</button>
+    </details>`;
+  }
   if (production.mode !== "composite") return "";
   const bgm = (production.bgm || []).filter((item) => Number(shot.no) >= Number(item.shotStart) && Number(shot.no) <= Number(item.shotEnd));
   const sfx = (production.sfx || []).filter((item) => Number(item.shotNo) === Number(shot.no));
@@ -668,6 +753,15 @@ function renderInspector(project, shot, take) {
   if (!shot) return `<aside class="inspector"></aside>`;
   const productionPanel = renderShotProduction(project, shot);
   if (shot.postOnly) {
+    const titleCardStyle = {
+      backgroundColor: "#090b0e",
+      titleColor: "#db3029",
+      bodyColor: "#f5f5f5",
+      captionColor: "#a6a6a6",
+      alignment: "center",
+      titleScale: "standard",
+      ...(shot.generationMeta?.titleCard || {})
+    };
     return `<aside class="inspector">
       <div class="panel-head"><h2>后期镜头</h2></div>
       <section class="inspector-section post-production-editor">
@@ -675,8 +769,19 @@ function renderInspector(project, shot, take) {
         <label class="field"><span>镜头标题</span><input data-shot-field="title" value="${escapeHtml(shot.title)}" /></label>
         <label class="field"><span>剪辑时长</span><input type="number" min="1" max="60" step="0.5" data-shot-field="editDuration" value="${escapeHtml(shot.editDuration || shot.duration)}" /></label>
         <label class="field"><span>字幕卡内容</span><textarea data-shot-field="prompt">${escapeHtml(shot.prompt)}</textarea></label>
+        <details class="compact-details title-card-settings" open>
+          <summary><span>字幕卡样式</span><small>本地渲染</small></summary>
+          <div class="title-card-style-grid">
+            <label class="field color-field"><span>背景</span><input type="color" data-title-card-style="backgroundColor" value="${escapeHtml(titleCardStyle.backgroundColor)}" /></label>
+            <label class="field color-field"><span>主标题</span><input type="color" data-title-card-style="titleColor" value="${escapeHtml(titleCardStyle.titleColor)}" /></label>
+            <label class="field color-field"><span>副标题</span><input type="color" data-title-card-style="bodyColor" value="${escapeHtml(titleCardStyle.bodyColor)}" /></label>
+            <label class="field color-field"><span>底部文字</span><input type="color" data-title-card-style="captionColor" value="${escapeHtml(titleCardStyle.captionColor)}" /></label>
+            <label class="field"><span>对齐</span><select data-title-card-style="alignment"><option value="center" ${titleCardStyle.alignment === "center" ? "selected" : ""}>居中</option><option value="left" ${titleCardStyle.alignment === "left" ? "selected" : ""}>左对齐</option></select></label>
+            <label class="field"><span>标题字号</span><select data-title-card-style="titleScale"><option value="compact" ${titleCardStyle.titleScale === "compact" ? "selected" : ""}>紧凑</option><option value="standard" ${titleCardStyle.titleScale === "standard" ? "selected" : ""}>标准</option><option value="large" ${titleCardStyle.titleScale === "large" ? "selected" : ""}>大标题</option></select></label>
+          </div>
+        </details>
         <button class="button primary" data-action="render-post" ${state.capabilities?.ffmpeg?.available ? "" : "disabled"}>${take ? "重新制作字幕卡" : "制作字幕卡"}</button>
-        <p class="hint">生成黑底文字视频并自动设为主选；可在粗剪中按实际剪辑时长播放。</p>
+        <p class="hint">按当前颜色、对齐与字号制作文字视频并自动设为主选；不消耗生成额度。</p>
       </section>
       ${productionPanel}
       ${take ? `<section class="inspector-section"><div class="section-title"><h3>当前后期版本</h3><span class="spacer"></span><span class="hint">TAKE ${String(take.no).padStart(2,"0")}</span></div><p class="hint">${escapeHtml(take.changeRequest || "本地后期字幕卡")}</p></section>` : ""}
@@ -1009,7 +1114,9 @@ async function renderPostShot() {
   if (!shot?.postOnly) return;
   try {
     await flushShotInputs(shot);
-    await api(`/api/shots/${encodeURIComponent(shot.id)}/render-post`, { method: "POST", body: "{}" });
+    const style = Object.fromEntries([...document.querySelectorAll("[data-title-card-style]")]
+      .map((input) => [input.dataset.titleCardStyle, input.value]));
+    await api(`/api/shots/${encodeURIComponent(shot.id)}/render-post`, { method: "POST", body: JSON.stringify({ style }) });
     await openProject(state.project.id, false, "workspace");
     toast("后期字幕卡已生成并设为主选");
   } catch (error) { toast(error.message, "error"); }
@@ -1042,7 +1149,7 @@ async function flushShotInputs(shot) {
 }
 
 function selectAdjacentShot(step) {
-  const shots = flattenShots();
+  const shots = workspaceShots();
   const index = shots.findIndex((shot) => shot.id === state.selectedShotId);
   const next = shots[index + step];
   if (next) {
@@ -1084,6 +1191,59 @@ async function refreshActiveProject() {
   if (hasActive) await openProject(projectId, true, "workspace").catch(() => {});
 }
 
+function transitionExecutionLabel(value) {
+  return ({ generate: "生成空镜", edit: "剪辑衔接", audio: "声音桥", local_effect: "本地特效" })[value] || "待确认";
+}
+
+function renderTransitionQueue() {
+  const project = state.project;
+  const allTransitions = project?.production?.transitions || [];
+  const episodeTransitions = state.transitionEpisode
+    ? allTransitions.filter((item) => Number(item.episodeNumber) === state.transitionEpisode)
+    : allTransitions;
+  const transitions = state.transitionFilter === "all"
+    ? episodeTransitions
+    : episodeTransitions.filter((item) => item.execution === state.transitionFilter);
+  const filters = [
+    ["all", "全部"], ["generate", "生成空镜"], ["edit", "剪辑衔接"], ["audio", "声音桥"], ["local_effect", "本地特效"]
+  ];
+  const counts = Object.fromEntries(filters.map(([key]) => [key, key === "all" ? episodeTransitions.length : episodeTransitions.filter((item) => item.execution === key).length]));
+  transitionDialogContent.innerHTML = `<div class="transition-wrap">
+    <header class="modal-head transition-head"><div><span class="kicker">TRANSITION QUEUE</span><h2>转场制作清单</h2><p>${escapeHtml(project?.name || "")} · ${escapeHtml(episodeLabel(project, state.transitionEpisode))} · 转场与正片镜头分开管理</p></div><button class="icon-button" data-action="close-transitions" aria-label="关闭">×</button></header>
+    <div class="transition-toolbar">
+      ${renderEpisodeNavigator(project, state.transitionEpisode, "data-transition-episode")}
+      <div class="transition-filters">${filters.map(([key, label]) => `<button class="${state.transitionFilter === key ? "active" : ""}" data-transition-filter="${key}" ${counts[key] ? "" : "disabled"}>${label}<small>${counts[key]}</small></button>`).join("")}</div>
+    </div>
+    <div class="transition-list">${transitions.length ? transitions.map((item) => `<article class="transition-card execution-${escapeHtml(item.execution || "unknown")}">
+      <div class="transition-card-head"><span class="transition-id">${escapeHtml(item.id || item.type || "转场")}</span><strong>${escapeHtml(item.title || item.method || item.function || "未命名转场")}</strong><span class="transition-execution">${escapeHtml(transitionExecutionLabel(item.execution))}</span></div>
+      <p>${escapeHtml(item.function || item.method || "未填写转场功能")}</p>
+      <div class="transition-link"><button data-transition-shot="${escapeHtml(item.fromShot || "")}" data-transition-shot-episode="${Number(item.episodeNumber || 0)}" ${item.fromShot ? "" : "disabled"}>${escapeHtml(item.fromShot || "片头")}</button><span>→</span><button data-transition-shot="${escapeHtml(item.toShot || "")}" data-transition-shot-episode="${Number(item.episodeNumber || 0)}" ${item.toShot ? "" : "disabled"}>${escapeHtml(item.toShot || "片尾")}</button><small>${Number(item.duration || 0) ? `${Number(item.duration)}s` : "时长未定"}</small></div>
+      ${item.prompt ? `<details><summary>查看执行提示词</summary><pre>${escapeHtml(item.prompt)}</pre></details>` : ""}
+    </article>`).join("") : '<div class="transition-empty"><strong>当前筛选没有转场</strong><span>切换剧集或制作类型查看其他项目。</span></div>'}</div>
+  </div>`;
+}
+
+function openTransitionQueue() {
+  if (!state.project?.production?.transitions?.length) return toast("当前项目没有识别到转场关系", "error");
+  state.transitionEpisode = state.activeEpisode;
+  renderTransitionQueue();
+  transitionDialog.showModal();
+}
+
+function locateTransitionShot(sourceShotId, episodeNumber) {
+  const shot = flattenShots().find((item) => Number(shotEpisodeNumber(item)) === Number(episodeNumber)
+    && String(item.generationMeta?.sourceShotId || "") === String(sourceShotId || ""));
+  if (!shot) return toast(`没有找到来源镜头 ${sourceShotId}`, "error");
+  state.activeEpisode = Number(episodeNumber) || 0;
+  state.roughEpisode = state.activeEpisode;
+  state.selectedShotId = shot.id;
+  state.selectedTakeId = shot.preferredTakeId || shot.takes[0]?.id || "";
+  state.view = "workspace";
+  localStorage.setItem("novelcut:lastShot", shot.id);
+  transitionDialog.close();
+  render();
+}
+
 async function openRoughCut() {
   await loadProjects().catch(() => {});
   if (!state.project) {
@@ -1091,7 +1251,11 @@ async function openRoughCut() {
     return toast("这个项目已删除或尚未打开，请从项目列表选择", "error");
   }
   try {
-    const data = await api(`/api/projects/${encodeURIComponent(state.project.id)}/rough-cut`);
+    const episodes = seriesEpisodes();
+    if (episodes.length && !state.roughEpisode) state.roughEpisode = state.activeEpisode || Number(episodes[0].number);
+    if (!episodes.length) state.roughEpisode = 0;
+    const query = state.roughEpisode ? `?episode=${state.roughEpisode}` : "";
+    const data = await api(`/api/projects/${encodeURIComponent(state.project.id)}/rough-cut${query}`);
     state.roughItems = data.items;
     state.roughIndex = Math.max(0, data.items.findIndex((item) => item.take));
     state.assembledUrl = "";
@@ -1113,8 +1277,9 @@ function renderRoughCut() {
   const exportAction = state.assembledUrl
     ? `<a class="button primary" href="${escapeHtml(state.assembledUrl)}" download>下载完整视频</a><button class="button ghost" data-action="assemble">重新合成</button>`
     : `<button class="button primary" data-action="assemble" ${missing || ready < 2 ? "disabled" : ""}>${missing ? `还差 ${missing} 镜，暂不能合片` : ready < 2 ? "至少需要 2 个镜头" : "合成完整视频"}</button>`;
-  roughCutContent.innerHTML = `<div class="roughcut-wrap">
-    <header class="modal-head roughcut-head"><div><h2>粗剪与导出</h2><p>${escapeHtml(state.project.name)} · ${formatDuration(totalDuration)} · ${ready}/${state.roughItems.length} 镜可播放</p></div><div class="roughcut-actions">${exportAction}<button class="icon-button" data-action="close-rough" aria-label="关闭">×</button></div></header>
+  roughCutContent.innerHTML = `<div class="roughcut-wrap ${seriesEpisodes().length ? "has-episodes" : ""}">
+    <header class="modal-head roughcut-head"><div><h2>粗剪与导出</h2><p>${escapeHtml(state.project.name)} · ${escapeHtml(episodeLabel(state.project, state.roughEpisode))} · ${formatDuration(totalDuration)} · ${ready}/${state.roughItems.length} 镜可播放</p></div><div class="roughcut-actions">${exportAction}<button class="icon-button" data-action="close-rough" aria-label="关闭">×</button></div></header>
+    ${seriesEpisodes().length ? `<div class="roughcut-episode-nav">${renderEpisodeNavigator(state.project, state.roughEpisode, "data-rough-episode", false)}<span>每集单独合成，避免误把整季导出为一个视频。</span></div>` : ""}
     <div class="roughcut-viewer">${player}</div>
     <div class="roughcut-strip">${state.roughItems.map((entry, index) => `<button class="roughcut-item ${index === state.roughIndex ? "active" : ""} ${entry.take ? "ready" : "missing"} ${entry.postOnly ? "post-only" : ""}" data-rough-index="${index}"><span>${String(entry.no).padStart(2,"0")} · ${entry.duration}s</span><strong>${escapeHtml(entry.title)}</strong><small>${entry.take ? "可播放" : entry.postOnly ? "待制作后期" : "未生成"}</small></button>`).join("")}</div>
   </div>`;
@@ -1132,7 +1297,7 @@ async function assembleRoughCut() {
   try {
     const button = roughCutContent.querySelector('[data-action="assemble"]');
     if (button) { button.disabled = true; button.textContent = "合片中…"; }
-    const data = await api(`/api/projects/${encodeURIComponent(state.project.id)}/assemble`, { method: "POST", body: "{}" });
+    const data = await api(`/api/projects/${encodeURIComponent(state.project.id)}/assemble`, { method: "POST", body: JSON.stringify({ episode: state.roughEpisode || 0 }) });
     state.assembledUrl = data.videoUrl;
     renderRoughCut();
     toast("完整粗剪已合成");
@@ -1163,6 +1328,19 @@ app.addEventListener("click", async (event) => {
   if (takeButton) { state.selectedTakeId = takeButton.dataset.takeId; return render(); }
   const countButton = event.target.closest("[data-count]");
   if (countButton) { state.generationCount = Number(countButton.dataset.count); return render(); }
+  const episodeButton = event.target.closest("[data-episode-number]");
+  if (episodeButton) {
+    state.activeEpisode = Number(episodeButton.dataset.episodeNumber || 0);
+    state.roughEpisode = state.activeEpisode;
+    const shots = workspaceShots();
+    if (!shots.some((shot) => shot.id === state.selectedShotId)) {
+      state.selectedShotId = shots[0]?.id || "";
+      state.selectedTakeId = shots[0]?.preferredTakeId || shots[0]?.takes[0]?.id || "";
+    }
+    state.changeRequest = "";
+    state.allowTextOnly = false;
+    return render();
+  }
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
   if (action === "home") { state.view = "home"; await loadProjects(); render(); }
@@ -1199,6 +1377,7 @@ app.addEventListener("click", async (event) => {
   if (action === "new-project") openCreateDialog("project");
   if (action === "append-shots") openCreateDialog("append");
   if (action === "rough-cut") openRoughCut();
+  if (action === "transitions") openTransitionQueue();
   if (action === "preview-prompt") openPromptPreview();
   if (action === "close-prompt") promptDialog.close();
   if (action === "generate") generateCurrent(false);
@@ -1211,7 +1390,7 @@ app.addEventListener("click", async (event) => {
   if (action === "focus-generate") document.querySelector("#changeRequest")?.focus();
   if (action === "capabilities") showCapabilities();
   if (action === "next-action") {
-    const shots = flattenShots();
+    const shots = workspaceShots();
     const unfinishedShots = shots.filter((shot) => !shot.takes.some((take) => take.status === "succeeded"));
     const unfinished = unfinishedShots.find((shot) => shot.assetReadiness?.ready) || unfinishedShots[0];
     const unselected = shots.find((shot) => shot.takes.some((take) => take.status === "succeeded") && !shot.preferredTakeId);
@@ -1264,6 +1443,7 @@ createForm.addEventListener("submit", async (event) => {
   try {
     const preview = await refreshSourcePreview();
     if (!preview?.shotCount) throw new Error("没有识别到可创建的分镜，请先检查解析预览");
+    if (preview.requiresConfirmation && payload.confirmSourceRisks !== "on") throw new Error("请先查看完稿体检，并确认使用系统修复方案后再创建");
     submit.disabled = true;
     submit.textContent = createMode === "append" ? "正在追加分镜…" : "正在整理项目…";
     const previousCount = flattenShots().length;
@@ -1295,7 +1475,7 @@ sourceFileInput.addEventListener("change", async () => {
 });
 
 document.querySelector("#sourceFileButton").addEventListener("pointerdown", () => {
-  setSourceStatus("请选择 .md / .markdown / .txt 文件，可一次多选");
+  setSourceStatus("请选择 .docx / .md / .markdown / .txt 文件，可一次多选");
 });
 
 document.querySelector("#sourceFolderButton").addEventListener("pointerdown", () => {
@@ -1356,6 +1536,13 @@ deleteForm.addEventListener("submit", async (event) => {
 });
 
 roughCutContent.addEventListener("click", (event) => {
+  const episodeButton = event.target.closest("[data-rough-episode]");
+  if (episodeButton) {
+    state.roughEpisode = Number(episodeButton.dataset.roughEpisode || 0);
+    state.assembledUrl = "";
+    openRoughCut();
+    return;
+  }
   const indexButton = event.target.closest("[data-rough-index]");
   if (indexButton) { state.roughIndex = Number(indexButton.dataset.roughIndex); state.assembledUrl = ""; renderRoughCut(); return; }
   const action = event.target.closest("[data-action]")?.dataset.action;
@@ -1365,6 +1552,25 @@ roughCutContent.addEventListener("click", (event) => {
 
 promptDialogContent.addEventListener("click", (event) => {
   if (event.target.closest('[data-action="close-prompt"]')) promptDialog.close();
+});
+
+transitionDialogContent.addEventListener("click", (event) => {
+  if (event.target.closest('[data-action="close-transitions"]')) return transitionDialog.close();
+  const episodeButton = event.target.closest("[data-transition-episode]");
+  if (episodeButton) {
+    state.transitionEpisode = Number(episodeButton.dataset.transitionEpisode || 0);
+    state.transitionFilter = "all";
+    renderTransitionQueue();
+    return;
+  }
+  const filterButton = event.target.closest("[data-transition-filter]");
+  if (filterButton) {
+    state.transitionFilter = filterButton.dataset.transitionFilter;
+    renderTransitionQueue();
+    return;
+  }
+  const shotButton = event.target.closest("[data-transition-shot]");
+  if (shotButton) locateTransitionShot(shotButton.dataset.transitionShot, shotButton.dataset.transitionShotEpisode);
 });
 
 document.addEventListener("keydown", (event) => {
