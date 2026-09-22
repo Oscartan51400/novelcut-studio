@@ -43,6 +43,16 @@ The series-bible DOCX path adds these invariants:
 - An overflowing split-shot prompt keeps its authored source and receives a
   duration-matched execution prompt, so a 4-second child shot no longer sends a
   14-second action plan to Seedance.
+- Source shot IDs are case-sensitive. `01A` (the added visual hook) and `01a`
+  (the first split child) are different shots and must not share transition
+  bindings.
+- The workspace defaults to the first episode and scopes the shot tree,
+  timeline, J/K navigation, next-action selection, rough cut, and assembly to
+  the selected episode. Series assembly is deliberately episode-only.
+- The transition queue can be filtered by episode and execution class. Every
+  transition preserves `fromShot -> toShot`, and both endpoints can locate the
+  corresponding production shot. The selected shot inspector shows adjacent
+  transitions as additional context.
 
 ## Local Title Cards
 
@@ -116,7 +126,9 @@ explicit risk acknowledgement.
 5. Start `npm run dev`, then run the focused test commands from `AGENTS.md`.
 6. Preview both acceptance sources and confirm their respective counts above.
 7. Browser-check DOCX upload/path import, episode cards, transition count,
-   health findings, and the required risk acknowledgement.
+   health findings, and the required risk acknowledgement. In the workspace,
+   verify episode 1 shows 27 shots, T01 shows `01a -> 01b`, both endpoints
+   locate the correct shot, and episode 1 rough cut shows 27 clips.
 8. Browser-check the Markdown total duration, shot 17, local title-card
    playback, and the per-shot production list.
 9. Run `npm run test:series` with the focused regression tests.
@@ -126,9 +138,10 @@ explicit risk acknowledgement.
 
 - Add local application of BGM, SFX, voice, and grading during final assembly;
   these are currently parsed, persisted, and displayed, but not mixed/rendered.
-- Add a season/episode navigator and a dedicated transition-production queue.
-  The data is already parsed, but the current workspace still groups episodes
-  into sequence names and only previews transition execution classes.
+- Turn `generate` transition entries into first-class production jobs with
+  reference assets, generation/retry, review, preferred take, and insertion in
+  the episode assembly. The current queue classifies and locates them but does
+  not submit paid generation work.
 - Add a platform-independent fallback renderer if Linux or Windows support is
   required.
 - Split `server.js` only when doing so reduces risk around parser, persistence,

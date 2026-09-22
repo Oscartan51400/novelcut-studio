@@ -42,6 +42,16 @@ const sourceText = `# 通用系列测试
 |---|---:|---:|---:|---:|
 | 第1集 | 3 | 7 | 1 | 8 |
 
+### 镜头 01A｜黑暗视觉钩｜原 v2.01A
+- 时长：5 秒
+- 场景：LOC-01
+- 时间轴：0–5 秒｜黑暗中竖瞳睁开。
+- Seedance 提示词：
+
+\`\`\`text
+5秒单一连续电影镜头。严格沿用GUI-01与LOC-01参考图。0至5秒：黑暗中竖瞳睁开。
+\`\`\`
+
 ### 镜头 01a｜林夕抬手｜原 v2.01
 - 时长：5 秒
 - 场景：LOC-01
@@ -108,15 +118,17 @@ async function main() {
   const preview = await request("/api/source/preview", { method: "POST", body: JSON.stringify({ sourceText }) });
   assert.equal(preview.status, 200);
   assert.equal(preview.body.production.mode, "series_bible");
-  assert.equal(preview.body.shotCount, 6, "转场关系不能计入视频镜头数");
+  assert.equal(preview.body.shotCount, 7, "转场关系不能计入视频镜头数");
   assert.equal(preview.body.production.transitions.length, 1);
   assert.equal(preview.body.production.transitions[0].execution, "edit");
+  assert.equal(preview.body.production.transitions[0].fromShot, "01a", "转场必须关联前一正片镜头");
+  assert.equal(preview.body.production.transitions[0].toShot, "01b", "转场必须关联后一正片镜头");
   assert.equal(preview.body.characterCount, 1, "画外音角色不能建立视觉人物资产");
   assert.equal(preview.body.sceneCount, 1);
   assert.equal(preview.body.propCount, 1);
   assert.equal(preview.body.requiresConfirmation, true);
-  assert.equal(preview.body.shots[1].generationMeta.promptRepaired, true);
-  assert.doesNotMatch(preview.body.shots[1].prompt, /5至9秒/);
+  assert.equal(preview.body.shots[2].generationMeta.promptRepaired, true);
+  assert.doesNotMatch(preview.body.shots[2].prompt, /5至9秒/);
 
   const rejected = await request("/api/projects", {
     method: "POST",
@@ -129,8 +141,16 @@ async function main() {
     body: JSON.stringify({ name: "系列完稿确认创建测试", sourceText, confirmSourceRisks: true })
   });
   assert.equal(created.status, 201);
-  assert.equal(created.body.sequences.flatMap((sequence) => sequence.shots).length, 6);
+  assert.equal(created.body.sequences.flatMap((sequence) => sequence.shots).length, 7);
   assert.equal(created.body.production.transitions.length, 1);
+  const episodeCut = await request(`/api/projects/${encodeURIComponent(created.body.id)}/rough-cut?episode=1`);
+  assert.equal(episodeCut.status, 200);
+  assert.equal(episodeCut.body.items.length, 7);
+  assert.equal(episodeCut.body.items.every((item) => item.episodeNumber === 1), true, "按集粗剪不得混入其他剧集");
+  assert.equal(episodeCut.body.items[0].sourceShotId, "01A");
+  const missingEpisodeCut = await request(`/api/projects/${encodeURIComponent(created.body.id)}/rough-cut?episode=99`);
+  assert.equal(missingEpisodeCut.status, 200);
+  assert.equal(missingEpisodeCut.body.items.length, 0);
   const removed = await request(`/api/projects/${encodeURIComponent(created.body.id)}`, {
     method: "DELETE",
     body: JSON.stringify({ expectedUpdatedAt: created.body.updatedAt })
@@ -155,7 +175,14 @@ async function main() {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 
-  console.log(JSON.stringify({ ok: true, checks: 19, covered: ["DOCX读取", "系列完稿识别", "转场边分类", "画外音过滤", "提示词时间轴修复", "风险确认闸门", "确认后创建"] }, null, 2));
+  const appSource = fs.readFileSync(path.join(__dirname, "..", "public", "app.js"), "utf8");
+  const indexSource = fs.readFileSync(path.join(__dirname, "..", "public", "index.html"), "utf8");
+  assert.match(indexSource, /id="transitionDialog"/, "工作台必须提供独立转场制作清单");
+  assert.match(appSource, /function renderEpisodeNavigator\(/, "工作台必须提供剧集导航");
+  assert.match(appSource, /JSON\.stringify\(\{ episode: state\.roughEpisode \|\| 0 \}\)/, "合片必须显式提交当前剧集");
+  assert.match(appSource, /data-transition-shot/, "转场关系必须能定位前后镜头");
+
+  console.log(JSON.stringify({ ok: true, checks: 31, covered: ["DOCX读取", "系列完稿识别", "转场边分类", "转场双向关联", "画外音过滤", "提示词时间轴修复", "风险确认闸门", "确认后创建", "按集粗剪", "剧集导航", "转场镜头定位"] }, null, 2));
 }
 
 main().catch((error) => {

@@ -459,7 +459,7 @@ function parseSeriesBibleSource(source) {
       const prompt = firstFence(body) || extractField(body, ["Seedance 提示词", "提示词"]);
       const execution = ["S", "M"].includes(event.transitionType) ? "generate"
         : event.transitionType === "F" ? "audio" : event.transitionType === "E" ? "local_effect" : "edit";
-      const transitionRecord = { id: event.sourceId, type: event.transitionType, title: event.title, duration, method, function: functionText, prompt, execution, fromShot: previousShot?.sourceId || "", toShot: "", episodeNumber };
+      const transitionRecord = { id: event.sourceId, type: event.transitionType, title: event.title, duration, method, function: functionText, prompt, execution, fromShot: previousShot?.sourceShotId || "", toShot: "", episodeNumber };
       transitions.push(transitionRecord);
       pendingTransitions.push(transitionRecord);
       continue;
@@ -2182,7 +2182,7 @@ async function downloadVideo(remoteUrl, projectId, takeId) {
   return `/outputs/${encodeURIComponent(safeName(projectId))}/takes/${encodeURIComponent(safeName(takeId))}.mp4`;
 }
 
-function getRoughCut(projectId) {
+function getRoughCut(projectId, episodeNumber = 0) {
   const project = db.prepare("SELECT id FROM projects WHERE id = ? AND deleted_at = ''").get(projectId);
   if (!project) throw Object.assign(new Error("项目不存在或已删除"), { statusCode: 404 });
   const rows = db.prepare(`SELECT shots.id, shots.shot_no, shots.title, shots.duration_sec, shots.edit_duration_sec,
@@ -2192,7 +2192,9 @@ function getRoughCut(projectId) {
     WHERE sequences.project_id = ? ORDER BY sequences.sort_order, shots.sort_order`).all(projectId);
   const preferred = db.prepare("SELECT * FROM takes WHERE id = ? AND status = 'succeeded'");
   const fallback = db.prepare("SELECT * FROM takes WHERE shot_id = ? AND status = 'succeeded' AND rejected = 0 ORDER BY approved DESC, take_no DESC LIMIT 1");
+  const normalizedEpisode = Math.max(0, Math.trunc(Number(episodeNumber) || 0));
   return rows.map((shot) => {
+    const generationMeta = safeJson(shot.generation_meta_json || "{}", {});
     const take = shot.preferred_take_id ? preferred.get(shot.preferred_take_id) : null;
     const resolved = take || fallback.get(shot.id) || null;
     return {
@@ -2201,11 +2203,13 @@ function getRoughCut(projectId) {
       title: shot.title,
       duration: Number(shot.edit_duration_sec || shot.duration_sec),
       generationDuration: shot.duration_sec,
-      postOnly: Boolean(safeJson(shot.generation_meta_json || "{}", {}).postOnly),
+      postOnly: Boolean(generationMeta.postOnly),
+      episodeNumber: Number(generationMeta.episodeNumber || 0),
+      sourceShotId: String(generationMeta.sourceShotId || ""),
       sequence: shot.sequence_name,
       take: resolved ? mapTake(resolved) : null
     };
-  });
+  }).filter((item) => !normalizedEpisode || item.episodeNumber === normalizedEpisode);
 }
 
 function wrapCardLine(value, limit = 16) {
@@ -2323,10 +2327,11 @@ async function renderPostProductionShot(shotId, payload = {}) {
   return { ok: true, takeId, videoUrl: localUrl, duration, style: titleCardStyle };
 }
 
-async function assembleProject(projectId) {
+async function assembleProject(projectId, episodeNumber = 0) {
   const project = db.prepare("SELECT * FROM projects WHERE id = ? AND deleted_at = ''").get(projectId);
   if (!project) throw Object.assign(new Error("项目不存在"), { statusCode: 404 });
-  const items = getRoughCut(projectId);
+  const normalizedEpisode = Math.max(0, Math.trunc(Number(episodeNumber) || 0));
+  const items = getRoughCut(projectId, normalizedEpisode);
   const pendingPost = items.filter((item) => item.postOnly && !item.take?.localUrl);
   if (pendingPost.length) throw Object.assign(new Error(`还有 ${pendingPost.length} 个后期镜头尚未制作（如字幕卡），请完成后再合片。`), { statusCode: 409 });
   const missing = items.filter((item) => !item.postOnly && !item.take?.localUrl);
@@ -2334,7 +2339,7 @@ async function assembleProject(projectId) {
   if (items.length < 2) throw Object.assign(new Error("至少需要 2 个镜头才能合片。"), { statusCode: 409 });
   const folder = path.join(outputsDir, safeName(projectId), "cuts");
   await fsp.mkdir(folder, { recursive: true });
-  const outputName = `cut-${Date.now()}.mp4`;
+  const outputName = `cut-${normalizedEpisode ? `episode-${normalizedEpisode}-` : ""}${Date.now()}.mp4`;
   const outputPath = path.join(folder, outputName);
   const args = ["-y"];
   const inputs = items.map((item) => outputUrlToPath(item.take.localUrl));
@@ -2783,10 +2788,13 @@ async function handleApi(req, res, url) {
   }
 
   match = url.pathname.match(/^\/api\/projects\/([^/]+)\/rough-cut$/);
-  if (req.method === "GET" && match) return sendJson(res, 200, { items: getRoughCut(decodeURIComponent(match[1])) });
+  if (req.method === "GET" && match) return sendJson(res, 200, { items: getRoughCut(decodeURIComponent(match[1]), url.searchParams.get("episode")) });
 
   match = url.pathname.match(/^\/api\/projects\/([^/]+)\/assemble$/);
-  if (req.method === "POST" && match) return sendJson(res, 200, await assembleProject(decodeURIComponent(match[1])));
+  if (req.method === "POST" && match) {
+    const payload = await readJson(req);
+    return sendJson(res, 200, await assembleProject(decodeURIComponent(match[1]), payload.episode));
+  }
 
   if (req.method === "GET" && url.pathname === "/api/jobs") {
     const projectId = url.searchParams.get("projectId");
